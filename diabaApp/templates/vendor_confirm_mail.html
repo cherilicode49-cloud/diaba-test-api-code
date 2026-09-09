@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Diaba Marketplace Email</title>
+<style>
+    body {
+        margin: 0;
+        padding: 0;
+        background-color: #f4f4f4;
+        font-family: Arial, sans-serif;
+    }
+
+    .email-container {
+        max-width: 600px;
+        margin: 30px auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+
+    .email-header {
+        text-align: center;
+        padding: 25px;
+        background-color: #ffffff;
+        border-bottom: 1px solid #eeeeee;
+    }
+
+    .email-header img {
+        max-width: 180px;
+        height: auto;
+    }
+
+    .email-body {
+        padding: 30px;
+        color: #333333;
+        line-height: 1.6;
+    }
+
+    .credentials-box {
+        background-color: #f9f9f9;
+        border: 1px solid #dddddd;
+        padding: 15px;
+        border-radius: 6px;
+        margin: 20px 0;
+    }
+
+    .credentials-box p {
+        margin: 8px 0;
+        font-size: 15px;
+    }
+
+    .button {
+        display: inline-block;
+        padding: 12px 25px;
+        background-color: #2d89ef;
+        color: white;
+        text-decoration: none;
+        border-radius: 5px;
+        margin-top: 20px;
+    }
+
+    .email-footer {
+        text-align: center;
+        padding: 15px;
+        font-size: 13px;
+        color: #777777;
+        background-color: #f4f4f4;
+    }
+</style>
+</head>
+<body>
+
+<div class="email-container">
+
+    <div class="email-header">
+        <img src="https://admin.diaba.store/lovable-uploads/a67095dd-68cd-4db7-b0d5-a6aa72976077.png" alt="Diaba Marketplace Logo">
+    </div>
+
+    <div class="email-body">
+        <p>Dear Vendor,</p>
+
+        <p>Your email address has been successfully updated in Diaba Marketplace.</p>
+
+        <p>Please find your login credentials below:</p>
+
+        <div class="credentials-box">
+            <p><strong>User Type:</strong> Vendor</p>
+            <p><strong>Email:</strong> {{email}}</p>
+            <p><strong>Password:</strong> {{password}}</p>
+        </div>
+
+        <p>For security reasons, please log in and change your password immediately.</p>
+
+        <a href="https://admin.diaba.store/" class="button">Login Now</a>
+
+        <p>If you did not request this update, please contact support immediately.</p>
+    </div>
+
+    <div class="email-footer">
+        © 2026 Diaba Marketplace. All rights reserved.
+    </div>
+
+</div>
+
+</body>
+</html>

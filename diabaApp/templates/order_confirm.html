@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Confirmation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container {
+            width: 100%;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            /* background-color: #299629; */
+            /* color: #f2f2f2; */
+        }
+        h1, h2 {
+            color: #035295;
+        }
+        .order-details, .shipping-details, .payment-method, .order-summary {
+            margin-bottom: 20px;
+        }
+        .order-summary table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .order-summary th, .order-summary td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .order-summary th {
+            background-color: #f2f2f2;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+      <div style="text-align: center;">
+        <img src="https://diaba.store/static/media/logo.ce4223f8b4ed0a332367.png" style="width: 40%;">
+      </div>
+        <h1>Order Confirmation</h1>
+        <p>Dear {{user}},</p>
+        <p>Thank you for your purchase! We're excited to let you know that we've received your order, and it's now being processed. Below are the details of your order:</p>
+        
+        <div class="order-details">
+            <h2>Order Details</h2>
+            <p><strong>Order Number:</strong> {{order_id}}</p>
+            <p><strong>Order Date:</strong> {{date}}</p>
+        </div>
+        
+        <div class="shipping-details">
+            <h2>Shipping Information</h2>
+            <p>{{customer_name}}<br>
+               {{street_address}}<br>
+               {{city}}, {{country}}<br>
+               </p>
+        </div>
+        
+        <div class="order-summary">
+            <h2>Order Summary</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Quantity</th>
+                        <th>Shipping Via</th>
+                        <th>Price</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                {% for item in order_list_product %}
+                <tbody>
+                    <tr>
+                        <td>{{item.variant_name}}</td>
+                        <td>{{item.quantity}}</td>
+                        <td>{{item.shipping_via}}</td>
+                        <td>{{item.price}}</td>
+                        <td>{{item.total_price}}</td>
+                    </tr>
+                </tbody>
+                {% endfor %}
+                <tfoot>
+                    <tr>
+                        <td colspan="4"><strong>Subtotal</strong></td>
+                        <td><strong>{{currency_name}} {{subtotal}}</strong></td>
+                    </tr>
+                    <tr>
+                        <td colspan="4">Ship Shipping Price</td>
+                        <td>{{currency_name}} {{ship_shipping_price}}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="4">Air Shipping Price</td>
+                        <td>{{currency_name}} {{air_shipping_price}}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="4">Express Shipping Price</td>
+                        <td>{{currency_name}} {{express_shipping_price}}</td>
+                    </tr>
+                   {% if discount_price %} 
+                    <tr>
+                        <td colspan="4">Promocode Discount ( <strong>{{promocode_name}} - {{promocode_discount}}%</strong> ) </td>
+                        <td>- {{currency_name}} {{discount_price}}</td>
+                    </tr>
+                    {% endif %}
+                    <tr>
+                        <td colspan="4"><strong>Total</strong></td>
+                        <td><strong>{{currency_name}} {{total_price}}</strong></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        
+        
+        <p>If you have any questions or need further assistance, please don't hesitate to contact our customer support team at <a href="mailto:contact@diaba.sn" target="_blank">contact@diaba.sn</a></p>
+        
+        <p>Thank you for choosing us for your purchase. We hope you enjoy your new items!</p>
+        
+        <p><b style="color: #035295;">Best regards,</b><br>
+        <b>TOUBA SOLUTION INFOMARIQUE </b><br>
+          Soprim extension villa N3, <br>
+          Dakar, Senegal</a><br>
+        <div class="footer">
+            <p>Note: This email is an acknowledgment that we have received your order. You will receive another email once your order has on out for delivery.</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Invoice</title>
+
+<style>
+    body {
+        margin: 0;
+        padding: 0;
+        font-family: "Inter", Arial, sans-serif;
+        background: #f4f6f8;
+        color: #1f2937;
+    }
+
+    .invoice {
+        /* max-width: 850px; */
+        margin: auto;
+        background: #ffffff;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.06);
+        overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+        padding: 26px 32px;
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .logo img {
+        height: 52px;
+    }
+
+    .invoice-title {
+        text-align: right;
+    }
+
+    .invoice-title h1 {
+        margin: 0;
+        font-size: 26px;
+        color: #035295;
+        letter-spacing: 1px;
+    }
+
+    .invoice-title span {
+        font-size: 13px;
+        color: #6b7280;
+    }
+
+    /* Info Section */
+    .info {
+        padding: 24px 32px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+
+    .info h3 {
+        margin-bottom: 6px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: #035295;
+    }
+
+    .info p {
+        margin: 4px 0;
+        font-size: 14px;
+    }
+
+    /* Table */
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+    }
+
+    thead {
+        background: #f0f7fc;
+    }
+
+    th, td {
+        padding: 14px 32px;
+        font-size: 14px;
+        border-bottom: 1px solid #e5e7eb;
+    }
+
+    th {
+        text-align: left;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: #035295;
+    }
+
+    .right {
+        text-align: right;
+    }
+
+    /* Totals */
+    .totals {
+        padding: 24px 32px;
+        display: flex;
+        justify-content: flex-end;
+    }
+
+    .totals table {
+        width: 320px;
+    }
+
+    .totals td {
+        padding: 8px 0;
+        font-size: 14px;
+    }
+
+    .grand {
+        font-size: 16px;
+        font-weight: 600;
+        color: #035295;
+        border-top: 2px solid #035295;
+        padding-top: 10px;
+    }
+
+    /* Footer */
+    .footer {
+        padding: 18px 32px;
+        border-top: 1px solid #e5e7eb;
+        font-size: 13px;
+        color: #6b7280;
+        text-align: center;
+    }
+
+    @media print {
+        body {
+            background: none;
+        }
+        .invoice {
+            box-shadow: none;
+        }
+    }
+</style>
+</head>
+
+<body>
+
+<div class="invoice">
+
+    <!-- Header -->
+    <div class="header">
+        <div class="logo">
+            <!-- <img src="logo.png" alt="Logo"> -->
+            <img src="https://admin.diaba.store/lovable-uploads/a67095dd-68cd-4db7-b0d5-a6aa72976077.png" alt="Company Logo">
+
+        </div>
+        <div class="invoice-title">
+            <h1>Invoice</h1>
+        </div>
+    </div>
+
+
+    <div class="info">
+        <div>
+            <h3>Billed To</h3>
+            <p><strong>{{customer_name}}</strong></p>
+            <p>{{street_address}}<p>
+            <p>{{city}}, {{country}}</p>
+            <p>{{mobile_number}}</p>
+
+        </div>
+        
+        <div>
+            <h3>Invoice Details</h3>
+            <p><strong>Order Number:</strong> {{order_id}}</p>
+            <p><strong>Order Date:</strong> {{date}}</p>
+            <p><strong>Payment Type:</strong> {{payment_type}}</p>
+        </div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Quantity</th>
+                <th>Shipping Via</th>
+                <th>Price</th>
+                <th>Total</th>
+            </tr>
+        </thead>
+        {% for item in order_list_product %}
+        <tbody>
+            <tr>
+                <td>{{item.variant_name}}</td>
+                <td>{{item.quantity}}</td>
+                <td>{{item.shipping_via}}</td>
+                <td>{{item.price}}</td>
+                <td>{{item.total_price}}</td>
+            </tr>
+        </tbody>
+        {% endfor %}
+    </table>
+
+    <!-- Totals -->
+    <div class="totals">
+        <table>
+            <tr>
+                <td>Subtotal</td>
+                <td class="right">{{currency_name}} {{subtotal}}</td>
+            </tr>
+            <tr>
+                <td>Ship Shipping Price</td>
+                <td class="right">{{currency_name}} {{ship_shipping_price}}</td>
+            </tr>
+            <tr>
+                <td>Air Shipping Price</td>
+                <td class="right">{{currency_name}} {{air_shipping_price}}</td>
+            </tr>
+            <tr>
+                <td>Express Shipping Price</td>
+                <td class="right">{{currency_name}} {{express_shipping_price}}</td>
+            </tr>
+            {% if discount_price %}             
+            <tr>
+                <td>Promocode Discount ( <strong>{{promocode_name}} - {{promocode_discount}}%</strong> )</td>
+                <td class="right">- {{currency_name}} {{discount_price}}</td>
+            </tr>
+            {% endif %}
+            <tr class="grand">
+                <td>Total</td>
+                <td class="right">{{currency_name}} {{total_price}}</td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        Thank you for shopping with us.<br>
+        This is a system-generated invoice.
+    </div>
+
+</div>
+
+</body>
+</html>

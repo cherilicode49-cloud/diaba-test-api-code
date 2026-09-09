@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payment Failed</title>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #dc3545, #fd7e14);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    .card {
+      background: #ffffff;
+      width: 90%;
+      max-width: 420px;
+      border-radius: 20px;
+      padding: 32px 24px;
+      text-align: center;
+      box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15);
+      animation: fadeIn 0.6s ease-in-out;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .logo {
+      /* width: 80px; */
+      height: 80px;
+      margin-bottom: 12px;
+    }
+
+    .error-icon {
+      font-size: 60px;
+      margin: 12px 0;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin: 8px 0;
+      color: #222;
+    }
+
+    p {
+      font-size: 15px;
+      color: #555;
+      line-height: 1.6;
+      margin: 12px 0 20px;
+    }
+
+    .note {
+      font-size: 14px;
+      color: #777;
+    }
+
+    .lang-switch {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .lang-btn {
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid #ddd;
+      background: #f8f9fa;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .lang-btn.active {
+      background: #dc3545;
+      color: #fff;
+      border-color: #dc3545;
+    }
+  </style>
+
+  <script>
+    function switchLang(lang) {
+      document.getElementById("en").style.display =
+        lang === "en" ? "block" : "none";
+      document.getElementById("fr").style.display =
+        lang === "fr" ? "block" : "none";
+
+      document.getElementById("btn-en").classList.toggle(
+        "active",
+        lang === "en"
+      );
+      document.getElementById("btn-fr").classList.toggle(
+        "active",
+        lang === "fr"
+      );
+    }
+  </script>
+</head>
+
+<body>
+  <div class="card">
+    <!-- Language Switch -->
+    <div class="lang-switch">
+      <button id="btn-en" class="lang-btn active" onclick="switchLang('en')">
+        English
+      </button>
+      <button id="btn-fr" class="lang-btn" onclick="switchLang('fr')">
+        Français
+      </button>
+    </div>
+
+    <!-- App Logo -->
+    <img
+      src="https://admin.diaba.store/lovable-uploads/a67095dd-68cd-4db7-b0d5-a6aa72976077.png"
+      alt="Diaba App Logo"
+      class="logo"
+    />
+
+    <div class="error-icon">❌</div>
+
+    <!-- English -->
+    <div id="en">
+      <h1>Payment Failed</h1>
+      <p>
+        Unfortunately, your payment could not be completed.<br />
+        No amount has been deducted.
+      </p>
+      <div class="note">
+        Please return to the <strong>Diaba App</strong> and try again or choose a
+        different payment method.
+      </div>
+    </div>
+
+    <!-- French -->
+    <div id="fr" style="display: none">
+      <h1>Paiement échoué</h1>
+      <p>
+        Malheureusement, votre paiement n’a pas pu être effectué.<br />
+        Aucun montant n’a été débité.
+      </p>
+      <div class="note">
+        Veuillez retourner sur l’application <strong>Diaba</strong> et réessayer
+        ou choisir un autre moyen de paiement.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

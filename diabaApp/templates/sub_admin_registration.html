@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Welcome to Our Ecommerce Platform</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f6f9;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 650px;
+            margin: auto;
+            background: #ffffff;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .header {
+            background-color: #035295;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header img {
+            max-width: 160px;
+        }
+        .header h1 {
+            color: #ffffff;
+            margin: 15px 0 0;
+            font-size: 20px;
+        }
+        .content {
+            padding: 30px;
+            text-align: left;
+        }
+        .content h2 {
+            color: #035295;
+            margin-bottom: 10px;
+        }
+        .content p {
+            font-size: 15px;
+            line-height: 1.6;
+            color: #333333;
+        }
+        .credentials {
+            background: #f7faff;
+            border: 1px solid #d9e7f7;
+            padding: 18px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+        .credentials p {
+            margin: 6px 0;
+            font-size: 14px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 22px;
+            margin-top: 15px;
+            background: #035295;
+            color: #ffffff !important;
+            border-radius: 6px;
+            text-decoration: none !important;
+            font-weight: bold;
+        }
+        .btn:hover {
+            background: #023e6d;
+            color: #ffffff !important;
+        }
+        .footer {
+            background: #f1f4f8;
+            padding: 15px;
+            text-align: center;
+            font-size: 13px;
+            color: #666666;
+        }
+        .footer a {
+            color: #035295;
+            text-decoration: none;
+        }
+        .creds{
+            color: black;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header with Logo -->
+        <div class="header">
+            <img src="http://122.167.187.175:8002/media/image/diaba_logo.png" alt="Company Logo">
+            <h1>Welcome to Diaba</h1>
+        </div>
+
+        <!-- Main Content -->
+        <div class="content">
+            <h2>Hello {{ subadmin_name }} 👋</h2>
+            <p>We are delighted to welcome you to the Diaba family!
+                As a registered Sub Admin, you now have access to our platform and can begin exploring and getting started right away.</p>
+
+            <p><strong>Here are your login credentials:</strong></p>
+            <div class="credentials">
+                <p class="creds"><strong>Email:</strong> {{ subadmin_email }}</p>
+                <p class="creds"><strong>Password:</strong> {{ subadmin_password }}</p>
+            </div>
+
+            <p>Click the button below to login and explore:</p>
+            <a href="http://admin.diaba.store" class="btn">Login to Dashboard</a>
+
+            <p style="margin-top: 20px;">If you have any issues, please reach out to our <a href="{{ support_url }}">support team</a>.</p>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>&copy; {{ current_year }} Diaba. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,33 @@
+# Django settings - contains secrets
+/diaba/settings.py
+
+# Python
+__pycache__/
+*.py[cod]
+*.log
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+
+# Django
+staticfiles/
+media/
+diabaApp_2026_09_07/
+static/
+diaba/settings.py
+diabaApp/migrations/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+*-firebase-adminsdk-*.json
+firebase*.json
