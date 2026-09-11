@@ -477,7 +477,20 @@ def initiate_bictorys_payment(request):
                 content_type="application/json",
                 status=400
             )
- 
+
+
+        countryCode = python_data.get("countryCode")
+
+        country_map = {
+            '+221': 'SN',  # Senegal
+            '+225': 'CI',  # Côte d'Ivoire
+            '+226': 'BF',  # Burkina Faso
+            '+223': 'ML',  # Mali
+            '+228': 'TG',  # Togo
+            '+229': 'BJ',  # Benin
+        }
+
+        country = country_map.get(countryCode) 
         # -----------------------------------------
         # Validate amount
         # -----------------------------------------
@@ -567,12 +580,12 @@ def initiate_bictorys_payment(request):
  
         payload = {
  
-            # "amount": amount,
-            "amount": 10,
+            "amount": amount,
+            # "amount": 10,
  
             "currency": "XOF",
  
-            "country": "SN",
+            "country": country,
  
             "paymentReference":
                 payment_reference,
@@ -2156,7 +2169,18 @@ def initiate_bictorys_payment_for_inquiry(request):
                 content_type="application/json",
                 status=400
             )
- 
+        countryCode = python_data.get("countryCode")
+        
+        country_map = {
+            '+221': 'SN',  # Senegal
+            '+225': 'CI',  # Côte d'Ivoire
+            '+226': 'BF',  # Burkina Faso
+            '+223': 'ML',  # Mali
+            '+228': 'TG',  # Togo
+            '+229': 'BJ',  # Benin
+        }
+
+        country = country_map.get(countryCode) 
         # -----------------------------------------
         # Validate amount
         # -----------------------------------------
@@ -2246,12 +2270,12 @@ def initiate_bictorys_payment_for_inquiry(request):
  
         payload = {
  
-            # "amount": amount,
-            "amount": 10,
+            "amount": amount,
+            # "amount": 10,
  
             "currency": "XOF",
  
-            "country": "SN",
+            "country": country,
  
             "paymentReference":
                 payment_reference,
