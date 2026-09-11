@@ -31,3 +31,4 @@ diabaApp/migrations/
 Thumbs.db
 *-firebase-adminsdk-*.json
 firebase*.json
+ecosystem.config.cjs
