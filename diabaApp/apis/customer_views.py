@@ -774,21 +774,23 @@ def customer_cart_check(request):
         all_product_data = list(set(models.CartDetail.objects.filter(customer= customer).values_list('product', flat=True)))
         reason_data = []
         for product in all_product_data:
-            get_minimun_qnt = int(models.ProductDetail.objects.filter(id = product).values_list('min_order_quantity', flat=True)[0])
-            product_name = models.ProductDetail.objects.filter(id = product).values_list('product_name', flat=True)[0]
-            # print(get_minimun_qnt,product, 'get_minimun_qnt')
+            if product != None:
+                get_minimun_qnt = int(models.ProductDetail.objects.filter(id = product).values_list('min_order_quantity', flat=True)[0])
+                product_name = models.ProductDetail.objects.filter(id = product).values_list('product_name', flat=True)[0]
+                # print(get_minimun_qnt,product, 'get_minimun_qnt')
 
-            quantity_get = list(models.CartDetail.objects.filter(customer= customer, product = product).values_list('quantity', flat=True))
-            total_quantity = sum(list(map(int, quantity_get)))
-           
+                quantity_get = list(models.CartDetail.objects.filter(customer= customer, product = product).values_list('quantity', flat=True))
+                total_quantity = sum(list(map(int, quantity_get)))
+            
 
-            if get_minimun_qnt > total_quantity:
-                add_quantity = get_minimun_qnt - total_quantity
-                # print(add_quantity, product)
-                product_name = product_name[:15] + '...' if len(product_name) > 15 else product_name
+                if get_minimun_qnt > total_quantity:
+                    add_quantity = get_minimun_qnt - total_quantity
+                    # print(add_quantity, product)
+                    product_name = product_name[:15] + '...' if len(product_name) > 15 else product_name
 
 
-                reason_data.append(product_name)
+                    reason_data.append(product_name)
+
         if reason_data != []:
             final_reason = ', '.join(map(str, reason_data)) 
             message = f'You need to add more quantity of “{final_reason}” products to your cart before proceeding to payment.'
