@@ -171,7 +171,7 @@ def create_wave_checkout(request):
         python_data = JSONParser().parse(io.BytesIO(request.body))
         print(python_data, 'python_data')
         amount = python_data.get('amount')
-        # amount = 10
+        amount = 1000
         currency = python_data.get('currency', 'XOF')
         success_url = "https://diaba.store/payment-success/"
         error_url = "https://diaba.store/payment-failed/"

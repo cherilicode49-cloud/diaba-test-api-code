@@ -80,7 +80,7 @@ def customer_login(request):
 
         now = datetime.now()
         date_time = now.strftime('%Y-%m-%d, %H:%M:%S')
-        
+        print(OTP, 'OTP')
         
 
 

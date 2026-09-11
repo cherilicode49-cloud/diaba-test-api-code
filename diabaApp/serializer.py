@@ -1299,26 +1299,58 @@ class WarehouseDetailSerializer(serializers.ModelSerializer):
 
 
 
+# class ProductOrderDetailSerializer(serializers.ModelSerializer):
+#     variant_name = serializers.ReadOnlyField(source='variant.name')
+#     variant_image = serializers.ReadOnlyField(source='variant.image.url')
+#     order_id = serializers.ReadOnlyField(source='order.order_id')
+#     order_status = serializers.ReadOnlyField(source='order.order_status')
+#     product_code = serializers.ReadOnlyField(source='product.product_code')
+#     product_name = serializers.ReadOnlyField(source='product.product_name')
+#     model_name = serializers.ReadOnlyField(source='variant.model.model_name')
+#     warehouse_name = serializers.ReadOnlyField(source='warehouse.name')
+#     product_cfa_price = serializers.ReadOnlyField(source = 'variant.price')
+    
+#     # total_price = serializers.SerializerMethodField()
+    
+
+
+#     class Meta:
+#         model = models.ProductOrderDetail
+#         fields = '__all__'
+
+#     # def get_total_price(self, obj):
+#     #         return int(float(obj.total_price))
+
+
 class ProductOrderDetailSerializer(serializers.ModelSerializer):
     variant_name = serializers.ReadOnlyField(source='variant.name')
-    variant_image = serializers.ReadOnlyField(source='variant.image.url')
     order_id = serializers.ReadOnlyField(source='order.order_id')
     order_status = serializers.ReadOnlyField(source='order.order_status')
     product_code = serializers.ReadOnlyField(source='product.product_code')
     product_name = serializers.ReadOnlyField(source='product.product_name')
     model_name = serializers.ReadOnlyField(source='variant.model.model_name')
     warehouse_name = serializers.ReadOnlyField(source='warehouse.name')
-    product_cfa_price = serializers.ReadOnlyField(source = 'variant.price')
-    
-    # total_price = serializers.SerializerMethodField()
+    product_cfa_price = serializers.ReadOnlyField(source='variant.price')
+
+    variant_image = serializers.SerializerMethodField()
+
+    def get_variant_image(self, obj):
+        image = getattr(obj.variant, 'image', None)
+
+        if image and image.name:
+            try:
+                return image.url
+            except ValueError:
+                return None
+
+        return None
 
     class Meta:
         model = models.ProductOrderDetail
         fields = '__all__'
 
-    # def get_total_price(self, obj):
-    #         return int(float(obj.total_price))
-    
+
+
 
 class ProductOrderDetailDataSerializer(serializers.ModelSerializer):
 

@@ -924,7 +924,9 @@ def inquiry_order_create(request):
         # city = get_address.city
         country = get_customer.country
         
-        if int(discount_price.replace(' ', '').strip())== 0:
+        # if int(discount_price.replace(' ', '').strip())== 0:
+        if int(str(discount_price).replace(' ', '').strip()) == 0:
+    # your logic
             discount_price = None
         # print("STARTING OF EMAIL.......", discount_price)
         
