@@ -2029,7 +2029,11 @@ class ProductInquirySerializer(serializers.ModelSerializer):
     total_amount = serializers.ReadOnlyField(source='transaction.total_amount')
     currency = serializers.ReadOnlyField(source='transaction.currency')
     
-    
+    transaction_details = ProductRequestTransactionSerializer(
+        source='transaction',
+        read_only=True
+    )
+
     
     
     images = serializers.SerializerMethodField()
