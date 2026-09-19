@@ -31,6 +31,8 @@ from diabaApp.apis.utility_views import *
 from diabaApp.apis.vendor_views import *
 from diabaApp.apis.warehouse_views import *
 from diabaApp.apis.wishlist_views import *
+from diabaApp.apis.banner_views import *
+from diabaApp.apis.container_views import *
 
 urlpatterns = [
 
@@ -505,6 +507,20 @@ urlpatterns = [
     path('api/dashboard_platform_module_count/',dashboard_platform_module_count, name='dashboard_platform_module_count'), #done
     path('api/dashboard_currencry_exchange_rate_base/',dashboard_currencry_exchange_rate_base, name='dashboard_currencry_exchange_rate_base'), #done
     
+    ## home screen banner 
+    path('api/banner_create_update/',banner_create_update, name='banner_create_update'), #done
+    path('api/banner_list_admin/',banner_list_admin, name='banner_list_admin'), #done
+    path('api/banner_list_app/',banner_list_app, name='banner_list_app'), #done
+    
+    ## Container Request  
+    path('api/container_request_create/',container_request_create, name='container_request_create'), #done
+    path('api/container_request_status_update/',container_request_status_update, name='container_request_status_update'), #done
+    path('api/all_container_request_list/',all_container_request_list, name='all_container_request_list'), #done
+    path('api/customer_container_request_list/',customer_container_request_list, name='customer_container_request_list'), #done
+    
+
+
+
 
 
 

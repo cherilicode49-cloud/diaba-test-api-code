@@ -13,3 +13,5 @@ from .review_models import *
 from .shipping_models import *
 from .vendor_models import *
 from .warehouse_models import *
+from .banner_models import *
+from .container_models import *

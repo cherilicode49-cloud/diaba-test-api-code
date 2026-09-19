@@ -2097,3 +2097,21 @@ class ProductPackagingBySerializer(serializers.ModelSerializer):
         model = models.ProductPackagingBy
         fields = '__all__'
 
+
+class BannerContentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.BannerContent
+        fields = '__all__'
+
+
+class ContainerRequestSerializer(serializers.ModelSerializer):
+    customer_name = serializers.ReadOnlyField(source='customer.name')
+    email = serializers.ReadOnlyField(source='customer.email')
+    countryCode = serializers.ReadOnlyField(source='customer.countryCode')
+    mobileNumber = serializers.ReadOnlyField(source='customer.mobileNumber')
+    destination_country_name = serializers.ReadOnlyField(source='destination_country.country_name')
+
+
+    class Meta:
+        model = models.ContainerRequest
+        fields = '__all__'
