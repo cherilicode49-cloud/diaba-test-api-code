@@ -9,6 +9,7 @@ class ProductInquiry(models.Model):
     inquiry_code = models.CharField(verbose_name='inquiry_code', null=True, blank=True)
 
     product_name = models.CharField(verbose_name='product_name', null=True, blank=True)
+    product_link = models.CharField(verbose_name='product_link', null=True, blank=True)
     description = models.TextField(verbose_name='description', null=True, blank=True)
     quantity = models.IntegerField(verbose_name='quantity', null=True, blank=True)
     created_at = models.DateTimeField(verbose_name='Created At', null=True, blank=True)

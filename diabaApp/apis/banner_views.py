@@ -21,25 +21,70 @@ IMAGE_URL = settings.IMAGE_URL
 
 @csrf_exempt
 def banner_create_update(request):
+
     if request.method == "POST":
 
-        banner_type = request.POST.get('banner_type')
-        title = request.POST.get('title')
-        status = request.POST.get('status', 'active')
-        image = request.FILES.get('image')
+        banner_type = request.POST.get("banner_type")
+        language = request.POST.get("language")
+        title = request.POST.get("title")
+        status = request.POST.get("status", "active")
+        image = request.FILES.get("image")
 
-        banner = models.BannerContent.objects.filter(banner_type=banner_type).first()
+        # Validate banner type
+        valid_banner_types = [
+            choice[0]
+            for choice in models.BannerContent.BANNER_TYPE_CHOICES
+        ]
+
+        if banner_type not in valid_banner_types:
+            res = {
+                "message": "Invalid banner_type.",
+                "allowed_values": valid_banner_types
+            }
+
+            return HttpResponse(
+                JSONRenderer().render(res),
+                content_type="application/json",
+                status=400
+            )
+
+        # Validate language
+        valid_languages = [
+            choice[0]
+            for choice in models.BannerContent.LANGUAGE_CHOICES
+        ]
+
+        if language not in valid_languages:
+            res = {
+                "message": "Invalid language.",
+                "allowed_values": valid_languages
+            }
+
+            return HttpResponse(
+                JSONRenderer().render(res),
+                content_type="application/json",
+                status=400
+            )
+
+        # Find existing banner for this type + language
+        banner = models.BannerContent.objects.filter(
+            banner_type=banner_type,
+            language=language
+        ).first()
 
         if banner is None:
 
             banner = models.BannerContent.objects.create(
                 banner_type=banner_type,
+                language=language,
                 title=title,
                 image=image,
                 status=status
             )
 
-            res = {'message': 'Banner Added Successfully.'}
+            res = {
+                "message": "Banner Added Successfully."
+            }
 
         else:
 
@@ -54,41 +99,99 @@ def banner_create_update(request):
 
             banner.save()
 
-            res = {'message': 'Banner data updated successfully.'}
+            res = {
+                "message": "Banner data updated successfully."
+            }
 
         json_data = JSONRenderer().render(res)
-        return HttpResponse(json_data,content_type='application/json',status=200)
 
-    res = {'message': 'Invalid request method.'}
+        return HttpResponse(
+            json_data,
+            content_type="application/json",
+            status=200
+        )
+
+    res = {
+        "message": "Invalid request method."
+    }
+
     json_data = JSONRenderer().render(res)
-    return HttpResponse(json_data,content_type='application/json',status=405)
+
+    return HttpResponse(
+        json_data,
+        content_type="application/json",
+        status=405
+    )
 
 @csrf_exempt
 def banner_list_admin(request):
 
     if request.method == "POST":
+
         banners = models.BannerContent.objects.all()
-        serializer = BannerContentSerializer(banners,many=True).data
 
-        res = {'data': serializer}
+        serializer = BannerContentSerializer(
+            banners,
+            many=True
+        ).data
+
+        res = {
+            "data": serializer
+        }
+
         json_data = JSONRenderer().render(res)
-        return HttpResponse(json_data,content_type='application/json',status=200)
 
-    res = {'message': 'Invalid request method.'}
+        return HttpResponse(
+            json_data,
+            content_type="application/json",
+            status=200
+        )
+
+    res = {
+        "message": "Invalid request method."
+    }
+
     json_data = JSONRenderer().render(res)
-    return HttpResponse(json_data,content_type='application/json',status=405)
 
+    return HttpResponse(
+        json_data,
+        content_type="application/json",
+        status=405
+    )
 @csrf_exempt
 def banner_list_app(request):
 
     if request.method == "POST":
-        banners = models.BannerContent.objects.filter(status = "active")
-        serializer = BannerContentSerializer(banners,many=True).data
 
-        res = {'data': serializer}
+        banners = models.BannerContent.objects.filter(
+            status="active"
+        )
+
+        serializer = BannerContentSerializer(
+            banners,
+            many=True
+        ).data
+
+        res = {
+            "data": serializer
+        }
+
         json_data = JSONRenderer().render(res)
-        return HttpResponse(json_data,content_type='application/json',status=200)
 
-    res = {'message': 'Invalid request method.'}
+        return HttpResponse(
+            json_data,
+            content_type="application/json",
+            status=200
+        )
+
+    res = {
+        "message": "Invalid request method."
+    }
+
     json_data = JSONRenderer().render(res)
-    return HttpResponse(json_data,content_type='application/json',status=405)
+
+    return HttpResponse(
+        json_data,
+        content_type="application/json",
+        status=405
+    )

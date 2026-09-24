@@ -518,9 +518,12 @@ urlpatterns = [
     path('api/all_container_request_list/',all_container_request_list, name='all_container_request_list'), #done
     path('api/customer_container_request_list/',customer_container_request_list, name='customer_container_request_list'), #done
     
-
-
-
+    
+    ## Inquiry Terms
+    path('api/container_create_update/',container_create_update, name='container_create_update'), #done
+    path('api/container_terms_list_admin/',container_terms_list_admin, name='container_terms_list_admin'), #done
+    path('api/container_terms_list_app/',container_terms_list_app, name='container_terms_list_app'), #done
+    
 
 
 

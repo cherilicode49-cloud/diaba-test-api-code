@@ -2110,8 +2110,16 @@ class ContainerRequestSerializer(serializers.ModelSerializer):
     countryCode = serializers.ReadOnlyField(source='customer.countryCode')
     mobileNumber = serializers.ReadOnlyField(source='customer.mobileNumber')
     destination_country_name = serializers.ReadOnlyField(source='destination_country.country_name')
-
+    product_type = CategoryDetailSerializer(many=True,read_only=True)
 
     class Meta:
         model = models.ContainerRequest
+        fields = '__all__'
+
+
+
+class ContainerTermsSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = models.ContainerTerms
         fields = '__all__'

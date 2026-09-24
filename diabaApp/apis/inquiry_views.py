@@ -351,3 +351,4 @@ def vendor_list_with_delay_note(request):
             'data':vendor_list_serializer
         }
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 200)
+

@@ -14,6 +14,8 @@ import json
 from django.http import JsonResponse
 from django.db.models import Max, Min
 from django.db.models.functions import Cast, TruncMonth, Coalesce, ExtractMonth, Round, TruncDate
+from django.utils import timezone
+from django.db.models import Sum, Count, F, Q
 
 import  requests
 from diabaApp.serializer import VendorDetailSerializer, ProductDetailSerializer, ProductModelSerializer, AdminProductModelVariantSerializer, \
