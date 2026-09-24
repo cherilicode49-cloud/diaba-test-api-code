@@ -23,6 +23,8 @@ from collections import Counter
 import numpy as np
 import re
 from django.core.cache import cache
+from openpyxl import load_workbook
+from django.core.files.storage import default_storage as fs
 
 import openpyxl, requests
 from django.utils import timezone
@@ -35,6 +37,7 @@ from django.contrib.postgres.search import TrigramSimilarity
 import os 
 from django.db.models import Q, F, Count, Case, Sum, When, IntegerField, Value, OuterRef, Subquery, ExpressionWrapper, CharField, FloatField
 from django.contrib.postgres.search import TrigramWordSimilarity
+from openpyxl.styles import PatternFill
 
 from diabaApp.faiss_store import get_faiss_index, preload_clip_categories
 from diabaApp.serializer import ProductDetailSerializer, ProductImageSerializer, ProductOtherSpecificationSerializer, ProductModelSerializer, \
@@ -42,6 +45,8 @@ from diabaApp.serializer import ProductDetailSerializer, ProductImageSerializer,
     PaymentCargoSliderSerializer, ImportantNoteSerializer, ProductDetailAppSerializer, ProductDataSerializer, \
     ProductDetailAppSerializer, ProductDataSerializer, DummyTagProductNameFrenchSerializer, ProductSearchSerializer, DummyTagProductNameEnglishSerializer, \
     ProductTagSearchSerializer, ProductNameSerializer, ProductCountrySerializer, ProductTagSerializer, RecentlyViewProductSerializer, AdminProductDetailSerializer
+
+SITE_MEDIA_BASE_URL = 'https://diaba-live.s3.amazonaws.com/'
 
 import torch
 import torchvision.models as torchmodels
@@ -4872,7 +4877,7 @@ def bulk_upload_submit(request):
 
             if not row or not row[0]:
                 continue
-
+            # print(row, 'row data ', flush=True)
             # -------- SAFE DATA EXTRACTION -------- #
             category = str(row[0] or "").strip()
             subcategory = str(row[1] or "").strip()
@@ -4992,6 +4997,7 @@ def bulk_upload_submit(request):
                 product_packaging_id=packaging_obj.id,
                 product_packaging_value=product_packaging_value,
                 shipping_via=shipping_via,
+                is_deleted=False,
             )
 
             # -------- MANY TO MANY -------- #
@@ -5006,7 +5012,8 @@ def bulk_upload_submit(request):
                 product_id=product.id,
                 model_name=product_name,
                 model_name_french=product_name,
-                status='Active'
+                status='Active',
+                is_deleted=False,
             )
 
             # -------- VARIANT -------- #
@@ -5017,7 +5024,8 @@ def bulk_upload_submit(request):
                 name_french=product_name,
                 price=final_price,
                 variant_verification='Approved',
-                status='Active'
+                status='Active',
+                is_deleted=False,
             )
 
             # -------- VENDOR PRICE -------- #
@@ -5027,7 +5035,8 @@ def bulk_upload_submit(request):
                 vendor_id=vendor_obj.id,
                 variant_id=variant.id,
                 price=price,
-                status='Active'
+                status='Active',
+                # is_deleted=False,
             )
 
             # -------- UPDATE FINAL PRICE -------- #

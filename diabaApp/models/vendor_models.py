@@ -79,6 +79,7 @@ class VendorProductPrice(models.Model):
     price = models.CharField(max_length=100, verbose_name="price",  null=True)
     quantity = models.CharField(max_length=100, verbose_name="quantity",  null=True)
     status = models.CharField(max_length=100, verbose_name="status",  null=True, default= 'Active')
+    # is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         return "%s" % self.id

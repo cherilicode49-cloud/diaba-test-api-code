@@ -93,7 +93,6 @@ class ProductDetail(models.Model):
     product_image_6_vector = models.JSONField(blank=True, null=True, verbose_name="product_image_6_vector")
     product_image_7_vector = models.JSONField(blank=True, null=True, verbose_name="product_image_7_vector")
     product_image_8_vector = models.JSONField(blank=True, null=True, verbose_name="product_image_8_vector")
-    
     price = models.FloatField( verbose_name="price",  null=True)
     discount = models.CharField( verbose_name="discount",  null=True , blank=True)
     final_price = models.CharField( verbose_name="final_price",  null=True, blank=True)
@@ -110,6 +109,7 @@ class ProductDetail(models.Model):
     delay_days_air = models.IntegerField( verbose_name="Delay Days Air",  null=True, blank=True)
     delay_days_ship = models.IntegerField( verbose_name="Delay Days Ship",  null=True, blank=True)
     delay_days_express = models.IntegerField( verbose_name="Delay Days Express",  null=True, blank=True)
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         return "%s" % str(self.id)+'--product--->'+str(self.product_name)+'---productcode--->'+str(self.product_code)
@@ -140,6 +140,7 @@ class ProductModel(models.Model):
     model_image = models.FileField(upload_to='image/model/image', verbose_name='Model Image', null=True, blank=True,
                         validators=[validators.validate_file_extension_image])
     status = models.CharField( verbose_name="status",  null=True, default='Active')
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         return "%s" % str(self.id)+'--->productDEtail----->'+str(self.product)
@@ -154,6 +155,7 @@ class ProductModelVariant(models.Model):
     price = models.CharField( verbose_name="Variant Price",  null=True, blank=True)
     variant_verification = models.CharField( verbose_name="variant_verification",  null=True, default='Approved')
     status = models.CharField( verbose_name="status",  null=True, default='Active')
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         return "%s" % str(self.id)+'--->MOdel detail----->'+str(self.model)
