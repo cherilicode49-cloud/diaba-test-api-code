@@ -171,7 +171,8 @@ class ProductDetailAppSerializer(serializers.ModelSerializer):
                     'final_price','shipping_via', 'refpro', 'reuser','currency','product_video',
                     'category_name','category_name_french','subcategory_name','country_of_origin_name',
                     'country_of_origin_image','vendor_name','dollar','xaf','xof','cdf','delivery_price_by',
-                    'delay_days_air','delay_days_ship','delay_days_express', 'product_type','product_packaging', 'product_packaging_value'
+                    'delay_days_air','delay_days_ship','delay_days_express', 'product_type','product_packaging', 'product_packaging_value',
+                    'is_inquiry'
                 ]
         # exclude = ['available_quantity', 'quantity', 'product_verification', 'vendor', 'category', 'subcategory',
         # 'product_image_1_vector','product_image_2_vector','product_image_3_vector','product_image_4_vector', 
