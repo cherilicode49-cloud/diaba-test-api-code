@@ -1489,12 +1489,10 @@ class ChatConversionSerializer(serializers.ModelSerializer):
     agent_name = serializers.SerializerMethodField()
     class Meta:
         model = models.ChatConversion
-        fields = ['id','user','admin','room','message','message_type','send_by','file','file_type','create_at','status','sender','send_time','agent_type','agent_name','message_french','product_id', 'is_deleted', 'deleted_at', 'deleted_by']
+        fields = ['id','user','admin','room','message','message_type','send_by','file','file_type','create_at','status','sender','send_time','agent_type','agent_name','message_french','product_id']
 
     def get_send_time(self, obj):
-        if obj.create_at:
-            return obj.create_at.strftime('%Y-%m-%d %H:%M:%S')
-        return ""
+        return obj.create_at.strftime('%Y-%m-%d %H:%M:%S')
     
     def get_agent_type(self, obj):
         if obj.chat_agent not in [None,'','null']:
@@ -1508,23 +1506,6 @@ class ChatConversionSerializer(serializers.ModelSerializer):
             return obj.chat_agent.name
         
         return "Agent"
-
-    def to_representation(self, instance):
-        data = super(ChatConversionSerializer, self).to_representation(instance)
-        user_type = self.context.get('user_type') if isinstance(self.context, dict) else None
-
-        # Mask deleted message for non-admin users/agents
-        if instance.is_deleted:
-            if str(user_type).lower() not in ["admin", "administrator"]:
-                data['message'] = "This message was deleted"
-                data['message_french'] = "Ce message a été supprimé"
-                data['file'] = None
-                data['file_type'] = None
-                data['product_id'] = None
-            else:
-                data['original_message'] = instance.message
-
-        return data
     
 
 class ChatRoomChatAgentDetailSerializer(serializers.ModelSerializer):
@@ -1553,35 +1534,27 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         fields = ['id','user','admin','room','created_at','user_name','user_email','user_country_code','user_mobile_number','unseen_count','last_message_detail','last_message','last_message_send_date','agent_detail','priority','is_resolved','note','last_message_type']
 
     def get_unseen_count(self, obj):
-        return models.ChatConversion.objects.filter(user__isnull = False, room = obj.id, status = "Unseen", is_deleted = False).count()
+        return models.ChatConversion.objects.filter(user__isnull = False, room = obj.id,status = "Unseen").count()
     
     def get_last_message(self, obj):
         last_message = models.ChatConversion.objects.filter(room = obj.id).last()
-        user_type = self.context.get('user_type') if isinstance(self.context, dict) else None
         
         if last_message:
-            if last_message.is_deleted and str(user_type).lower() not in ["admin", "administrator"]:
-                message = "This message was deleted"
-            else:
-                message = last_message.message
+            message = last_message.message
         else:
             message = ""
         return message
     
     def get_last_message_send_date(self, obj):
-        if obj.updated_at:
-            return obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')
-        return ""
+        return obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')
     
     def get_last_message_detail(self, obj):
         last_message = models.ChatConversion.objects.filter(room = obj.id).last()
-        user_type = self.context.get('user_type') if isinstance(self.context, dict) else None
+
+        # print("Last message------>",last_message)
 
         if last_message:
-            if last_message.is_deleted and str(user_type).lower() not in ["admin", "administrator"]:
-                message = "This message was deleted"
-            else:
-                message = last_message.message
+            message = last_message.message
             send_by = last_message.send_by
         else:
             message = ""
