@@ -110,6 +110,7 @@ class ProductDetail(models.Model):
     delay_days_ship = models.IntegerField( verbose_name="Delay Days Ship",  null=True, blank=True)
     delay_days_express = models.IntegerField( verbose_name="Delay Days Express",  null=True, blank=True)
     is_deleted = models.BooleanField(default=False)
+    is_inquiry = models.BooleanField(default=False)
 
     def __str__(self):
         return "%s" % str(self.id)+'--product--->'+str(self.product_name)+'---productcode--->'+str(self.product_code)

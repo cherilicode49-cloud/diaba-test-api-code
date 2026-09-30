@@ -261,6 +261,7 @@ def product_model_variant_create(request):
     product_video = python_data.get('product_video', None)
     available_country = python_data.get('available_country', None)
     tag = python_data.get('tag', None)
+    is_inquiry = python_data.get('is_inquiry', None)
     
     
 
@@ -352,6 +353,7 @@ def product_model_variant_create(request):
         product_type_id = product_type,
         product_packaging_id = product_packaging,
         product_packaging_value = product_packaging_value,
+        is_inquiry = is_inquiry
         
     )
     product.save()
@@ -792,9 +794,7 @@ def product_model_variant_update(request):
         product_type = python_data.get('product_type')
         product_packaging = python_data.get('product_packaging')
         product_packaging_value = python_data.get('product_packaging_value')
-        
-        
-        
+        is_inquiry = python_data.get('is_inquiry')
         
         other_specification = json.loads(python_data.get('other_specification'))
 
@@ -867,9 +867,7 @@ def product_model_variant_update(request):
             get_product.product_packaging_id = product_packaging
             get_product.product_packaging_value = product_packaging_value
             get_product.status = python_data.get('status', get_product.status)
-
-
-            
+            get_product.is_inquiry = python_data.get('is_inquiry', get_product.is_inquiry)
 
             get_product.save()
             try: 
