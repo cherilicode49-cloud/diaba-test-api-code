@@ -205,6 +205,7 @@ urlpatterns = [
     path('api/agent_chat_room_list/',agent_chat_room_list, name='agent_chat_room_list'), #done
     path('api/chat_room_update/',chat_room_update, name='chat_room_update'), #done
     path('api/user_new_message_count/',user_new_message_count, name='user_new_message_count'), #done
+    path('api/delete_chat_message/',delete_chat_message, name='delete_chat_message'), #done
 
 
     path('api/daily_price_update/',daily_price_update, name='daily_price_update'), #done

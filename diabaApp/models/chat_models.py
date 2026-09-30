@@ -39,6 +39,9 @@ class ChatConversion(models.Model):
 
     create_at = models.DateTimeField(verbose_name="Created At", null=True, blank=True)
     status = models.CharField(verbose_name='Status', null=True, blank=True, default='Unseen')
+    is_deleted = models.BooleanField(verbose_name='Is Deleted', default=False)
+    deleted_at = models.DateTimeField(verbose_name='Deleted At', null=True, blank=True)
+    deleted_by = models.CharField(verbose_name='Deleted By', max_length=50, null=True, blank=True)
 
     def __str__(self):
         return "%s" % str(self.id) +"--ROOM ID-->"+str(self.room)

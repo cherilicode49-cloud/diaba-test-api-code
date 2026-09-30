@@ -5,7 +5,7 @@ from django.utils import timezone
 from datetime import datetime
 from diabaApp.services.room_service import get_or_create_room
 from diabaApp.services.message_service import save_message, send_notification_to_customer
-from diabaApp.chatDBoperation.queries import get_user_details,get_admin_agent_detail,unseen_message,get_user_data, get_room_by_room_id, get_recent_message
+from diabaApp.chatDBoperation.queries import get_user_details,get_admin_agent_detail,unseen_message,get_user_data, get_room_by_room_id, get_recent_message, soft_delete_chat_message
 
 
 sio = socketio.AsyncServer(
@@ -474,3 +474,129 @@ async def send_message(sid, data):
 
     except Exception as e:
         print("send_message error:", str(e))
+
+
+@sio.on("delete_message")
+async def delete_message(sid, data):
+    print("DELETE MESSAGE DATA ------>", data)
+    try:
+        conversation_id = data.get("conversation_id") or data.get("id") or data.get("message_id")
+        sender = data.get("sender") or data.get("send_by")
+        sender_id = data.get("sender_id") or data.get("user_id") or data.get("agent_id") or data.get("admin_id")
+
+        if not conversation_id or not sender:
+            await sio.emit("delete_message_error", {
+                "error": "Missing conversation_id or sender",
+                "conversation_id": conversation_id
+            }, to=sid)
+            return
+
+        result = await soft_delete_chat_message(conversation_id, sender, sender_id)
+        if not result["success"]:
+            await sio.emit("delete_message_error", {
+                "error": result["error"],
+                "conversation_id": conversation_id
+            }, to=sid)
+            return
+
+        msg = result["message"]
+        room_str = result["room"] or data.get("room")
+        agent_id = result["agent_id"]
+        deleted_at = result["deleted_at"]
+
+        # Payload for normal customer & agent view
+        payload_for_users = {
+            "id": msg.id,
+            "conversation_id": msg.id,
+            "room": room_str,
+            "is_deleted": True,
+            "deleted_by": sender,
+            "deleted_at": deleted_at,
+            "message": "This message was deleted",
+            "message_type": msg.message_type,
+            "send_by": msg.send_by,
+        }
+
+        # Payload for admin view (retains original content for audit/monitoring)
+        payload_for_admin = {
+            "id": msg.id,
+            "conversation_id": msg.id,
+            "room": room_str,
+            "is_deleted": True,
+            "deleted_by": sender,
+            "deleted_at": deleted_at,
+            "message": msg.message,
+            "original_message": msg.message,
+            "message_type": msg.message_type,
+            "send_by": msg.send_by,
+        }
+
+        # 1. Emit to customer & agent in the chat room
+        if room_str:
+            await sio.emit("message_deleted", payload_for_users, room=room_str)
+
+        # 2. Emit to agent personal room
+        if agent_id:
+            await sio.emit("message_deleted", payload_for_users, room=f"agent_{agent_id}")
+
+        # 3. Emit to admin room (admin can view the message with deleted flag)
+        await sio.emit("message_deleted", payload_for_admin, room="admins")
+
+        # 4. Confirmation to the requester
+        await sio.emit("delete_message_success", {
+            "status": "success",
+            "conversation_id": msg.id,
+            "room": room_str
+        }, to=sid)
+
+        # 5. Update user list / sidebar for admins and agents
+        if room_str:
+            try:
+                room_data = await get_room_by_room_id(room_str)
+                if room_data:
+                    user_detail = await get_user_data(room_str)
+                    admin_agent_data = await get_admin_agent_detail(room_data.chat_agent_id) if room_data.chat_agent_id else {}
+
+                    last_message = await get_recent_message(room_str)
+                    recent_msg_text = last_message["message"] if last_message else None
+                    recent_send_by = last_message["send_by"] if last_message else None
+                    last_message_send_date = last_message["last_message_send_date"] if last_message else None
+                    unseen_count = await unseen_message(room_data.id)
+
+                    admin_list_payload = {
+                        "room": room_str,
+                        "last_message": recent_msg_text if recent_msg_text else "📎 File",
+                        "new_room": False,
+                        'last_sender': recent_send_by,
+                        'sender_name': user_detail.get("name"),
+                        'id': room_data.id,
+                        'user_name': user_detail.get("name"),
+                        'user_email': user_detail.get("email"),
+                        'user_country_code': user_detail.get("countryCode"),
+                        'user_mobile_number': user_detail.get("mobileNumber"),
+                        'last_message_detail': {
+                            'message': recent_msg_text if recent_msg_text else "📎 File",
+                            'send_by': recent_send_by
+                        },
+                        'agent_detail': {
+                            'agent_type': admin_agent_data.get("agent_type"),
+                            'id': room_data.chat_agent_id,
+                            'name': admin_agent_data.get("name"),
+                            'email': admin_agent_data.get("email"),
+                            'mobileNumber': admin_agent_data.get("mobileNumber"),
+                        },
+                        'is_resolved': room_data.is_resolved,
+                        'last_message_send_date': last_message_send_date,
+                        'unseen_count': unseen_count,
+                        'is_online': room_data.user_id in active_users,
+                    }
+
+                    await sio.emit("update_user_list", admin_list_payload, room="admins")
+                    if room_data.chat_agent_id:
+                        await sio.emit("update_user_list", admin_list_payload, room=f"agent_{room_data.chat_agent_id}")
+            except Exception as ex:
+                print("Error updating list after delete:", ex)
+
+    except Exception as e:
+        print("delete_message error:", str(e))
+        await sio.emit("delete_message_error", {"error": str(e)}, to=sid)

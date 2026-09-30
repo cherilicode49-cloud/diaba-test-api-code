@@ -40,7 +40,7 @@ def chat_history(request):
     # print("python_data--ChatHIstory-->",python_data)
 
     messages = models.ChatConversion.objects.filter(room__room=room).order_by("create_at")
-    messages_serializer = ChatConversionSerializer(messages, many=True).data
+    messages_serializer = ChatConversionSerializer(messages, many=True, context={'user_type': user_type}).data
 
     # Update Unseen Message toooo Seen
     if user_type in ["Agent","Admin"]:
@@ -901,6 +901,82 @@ def chat_agent_product_list(request):
         }
         json_data = JSONRenderer().render(res)
         return HttpResponse(json_data, content_type= 'application/json', status=200)
+
+
+@csrf_exempt
+def delete_chat_message(request):
+    if request.method == "POST":
+        try:
+            python_data = JSONParser().parse(io.BytesIO(request.body))
+            conversation_id = python_data.get('conversation_id') or python_data.get('id') or python_data.get('message_id')
+            sender = python_data.get('sender') or python_data.get('send_by')
+            sender_id = python_data.get('sender_id') or python_data.get('user_id') or python_data.get('agent_id') or python_data.get('admin_id')
+
+            if not conversation_id or not sender:
+                res = {'status': False, 'message': 'Missing conversation_id or sender'}
+                return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+            message = models.ChatConversion.objects.filter(id=conversation_id).first()
+            if not message:
+                res = {'status': False, 'message': 'Message not found'}
+                return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=404)
+
+            if message.is_deleted:
+                res = {'status': False, 'message': 'Message is already deleted'}
+                return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+            # 24-hour limit check
+            if message.create_at:
+                time_diff = timezone.now() - message.create_at
+                if time_diff > timedelta(hours=24):
+                    res = {'status': False, 'message': 'Message cannot be deleted after 24 hours'}
+                    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+            sender_type_clean = str(sender).strip().lower()
+
+            if sender_type_clean in ["user", "customer"]:
+                if str(message.send_by).strip().lower() not in ["user", "customer"]:
+                    res = {'status': False, 'message': 'You can only delete messages sent by you'}
+                    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=403)
+                if sender_id and str(message.user_id) != str(sender_id):
+                    res = {'status': False, 'message': 'Unauthorized to delete this message'}
+                    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=403)
+
+            elif sender_type_clean in ["agent", "chat_agent"]:
+                if str(message.send_by).strip().lower() not in ["agent", "chat_agent"]:
+                    res = {'status': False, 'message': 'You can only delete messages sent by you'}
+                    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=403)
+                if sender_id and str(message.chat_agent_id) != str(sender_id):
+                    res = {'status': False, 'message': 'Unauthorized to delete this message'}
+                    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=403)
+
+            elif sender_type_clean in ["admin", "administrator"]:
+                pass
+
+            else:
+                res = {'status': False, 'message': f'Invalid sender type: {sender}'}
+                return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+            now = timezone.now()
+            message.is_deleted = True
+            message.deleted_at = now
+            message.deleted_by = sender
+            message.save()
+
+            res = {
+                'status': True,
+                'message': 'Message deleted successfully',
+                'conversation_id': message.id,
+                'deleted_at': now.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+        except Exception as e:
+            res = {'status': False, 'message': str(e)}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=500)
+
+    res = {'status': False, 'message': 'Method not allowed'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
 
 
 
