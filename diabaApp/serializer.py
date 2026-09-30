@@ -2124,3 +2124,11 @@ class ContainerTermsSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.ContainerTerms
         fields = '__all__'
+
+
+
+class ContainerBookingFeeSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = models.ContainerBookingFee
+        fields = '__all__'

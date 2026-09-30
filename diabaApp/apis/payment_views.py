@@ -33,7 +33,16 @@ import hashlib
 BASE_URL = settings.BASE_URL
 IMAGE_URL = settings.IMAGE_URL
 import  requests
+import io
+import uuid
+import stripe
 
+from django.conf import settings
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+
+from rest_framework.parsers import JSONParser
+from rest_framework.renderers import JSONRenderer
 
 @csrf_exempt
 def cash_in_view(request):
@@ -2575,3 +2584,1138 @@ def initiate_bictorys_payment_for_inquiry(request):
 
 
 
+@csrf_exempt
+def initiate_stripe_payment(request):
+
+    try:
+
+        # -----------------------------------------
+        # Validate request method
+        # -----------------------------------------
+
+        if request.method != "POST":
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "POST method required"
+                }),
+                content_type="application/json",
+                status=405
+            )
+
+        # -----------------------------------------
+        # Parse request
+        # -----------------------------------------
+
+        try:
+
+            python_data = JSONParser().parse(
+                io.BytesIO(request.body)
+            )
+
+        except Exception as e:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "Invalid JSON payload",
+                    "details": str(e)
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        # -----------------------------------------
+        # Get amount and currency
+        # -----------------------------------------
+
+        amount = python_data.get("amount")
+        currency = python_data.get("currency")
+
+        # -----------------------------------------
+        # Validate amount
+        # -----------------------------------------
+
+        if amount is None:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "Amount is required"
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        try:
+
+            amount = float(amount)
+
+        except (ValueError, TypeError):
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "Invalid amount"
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        if amount <= 0:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "Amount must be greater than zero"
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        # -----------------------------------------
+        # Validate currency
+        # -----------------------------------------
+
+        if not currency:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "Currency is required"
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        currency = str(currency).strip().lower()
+
+        # -----------------------------------------
+        # Supported currencies
+        # -----------------------------------------
+
+        allowed_currencies = [
+            "xof",
+            "usd",
+            "eur",
+            "gbp",
+            "cad",
+            "aud",
+            "inr",
+            "jpy",
+            "krw",
+            "vnd"
+        ]
+
+        if currency not in allowed_currencies:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": f"Unsupported currency: {currency}",
+                    "supported_currencies": allowed_currencies
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        # -----------------------------------------
+        # Convert amount to Stripe smallest unit
+        # -----------------------------------------
+
+        # Stripe uses the smallest currency unit.
+        #
+        # Example:
+        #
+        # USD 10.00 -> 1000 cents
+        # EUR 10.00 -> 1000 cents
+        #
+        # XOF 100 -> 100
+        # JPY 100 -> 100
+        #
+        # XOF, JPY, KRW and VND are zero-decimal
+        # currencies.
+
+        zero_decimal_currencies = [
+            "xof",
+            "jpy",
+            "krw",
+            "vnd"
+        ]
+
+        if currency in zero_decimal_currencies:
+
+            stripe_amount = int(round(amount))
+
+        else:
+
+            stripe_amount = int(round(amount * 100))
+
+        # -----------------------------------------
+        # Generate payment reference
+        # -----------------------------------------
+
+        payment_reference = (
+            f"STRIPE-"
+            f"{uuid.uuid4().hex[:12].upper()}"
+        )
+
+        # Example:
+        #
+        # STRIPE-83CD18D2A728
+
+        # -----------------------------------------
+        # Stripe configuration
+        # -----------------------------------------
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+
+        # -----------------------------------------
+        # Create Stripe PaymentIntent
+        # -----------------------------------------
+
+        payment_intent = stripe.PaymentIntent.create(
+
+            amount=stripe_amount,
+
+            currency=currency,
+
+            automatic_payment_methods={
+                "enabled": True
+            },
+
+            metadata={
+                "payment_reference": payment_reference,
+                "currency": currency,
+                "original_amount": str(amount)
+            }
+        )
+
+        print(
+            "STRIPE PAYMENT INTENT:",
+            payment_intent
+        )
+
+        # -----------------------------------------
+        # Extract Stripe transaction ID
+        # -----------------------------------------
+
+        payment_intent_id = payment_intent.id
+
+        # -----------------------------------------
+        # Client secret
+        # -----------------------------------------
+
+        client_secret = payment_intent.client_secret
+
+        if not client_secret:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error":
+                        "Stripe client secret not received"
+                }),
+                content_type="application/json",
+                status=502
+            )
+
+        # -----------------------------------------
+        # Create local pending transaction
+        # -----------------------------------------
+
+        transaction = (
+            models.OrderTransaction.objects.create(
+
+                order=None,
+
+                customer=None,
+
+                payment_type="stripe",
+
+                cash_status="pending",
+
+                payment_id=payment_intent_id,
+
+                reference_id=payment_reference,
+
+                fee_amount="0",
+
+                net_amount=str(amount),
+
+                total_amount=str(amount),
+
+                tax_price="0",
+
+                # Save exact currency
+                currency=currency.upper(),
+
+                status="PENDING"
+            )
+        )
+
+        # -----------------------------------------
+        # Response to React Native
+        # -----------------------------------------
+
+        return HttpResponse(
+            JSONRenderer().render({
+
+                "success": True,
+
+                "message":
+                    "Stripe payment initiated successfully",
+
+                "transaction_id":
+                    transaction.id,
+
+                "payment_reference":
+                    payment_reference,
+
+                "stripe_payment_intent_id":
+                    payment_intent_id,
+
+                "client_secret":
+                    client_secret,
+
+                "amount":
+                    amount,
+
+                "currency":
+                    currency.upper(),
+
+                "stripe_amount":
+                    stripe_amount,
+
+                "status":
+                    "PENDING"
+            }),
+            content_type="application/json",
+            status=200
+        )
+
+    # ---------------------------------------------
+    # Stripe exception
+    # ---------------------------------------------
+
+    except stripe.error.StripeError as e:
+
+        print(
+            "STRIPE PAYMENT ERROR:",
+            str(e)
+        )
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Stripe payment initiation failed",
+                "details":
+                    str(e)
+            }),
+            content_type="application/json",
+            status=500
+        )
+
+    # ---------------------------------------------
+    # Generic exception
+    # ---------------------------------------------
+
+    except Exception as e:
+
+        print(
+            "STRIPE PAYMENT ERROR:",
+            str(e)
+        )
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Payment initiation failed",
+                "details":
+                    str(e)
+            }),
+            content_type="application/json",
+            status=500
+        )
+
+
+# =========================================================
+# STRIPE WEBHOOK
+# =========================================================
+
+@csrf_exempt
+def stripe_webhook(request):
+
+    # ---------------------------------------------
+    # Validate request method
+    # ---------------------------------------------
+
+    if request.method != "POST":
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error": "POST method required"
+            }),
+            content_type="application/json",
+            status=405
+        )
+
+    # ---------------------------------------------
+    # Get Stripe webhook secret
+    # ---------------------------------------------
+
+    webhook_secret = settings.STRIPE_WEBHOOK_SECRET
+
+    if not webhook_secret:
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Stripe webhook secret is not configured"
+            }),
+            content_type="application/json",
+            status=500
+        )
+
+    # ---------------------------------------------
+    # Get Stripe signature
+    # ---------------------------------------------
+
+    stripe_signature = request.META.get(
+        "HTTP_STRIPE_SIGNATURE"
+    )
+
+    if not stripe_signature:
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Stripe signature is missing"
+            }),
+            content_type="application/json",
+            status=400
+        )
+
+    # ---------------------------------------------
+    # Verify Stripe webhook
+    # ---------------------------------------------
+
+    try:
+
+        event = stripe.Webhook.construct_event(
+            request.body,
+            stripe_signature,
+            webhook_secret
+        )
+
+    except ValueError as e:
+
+        print(
+            "STRIPE WEBHOOK INVALID PAYLOAD:",
+            str(e)
+        )
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Invalid Stripe webhook payload"
+            }),
+            content_type="application/json",
+            status=400
+        )
+
+    except stripe.error.SignatureVerificationError as e:
+
+        print(
+            "STRIPE WEBHOOK SIGNATURE ERROR:",
+            str(e)
+        )
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Invalid Stripe webhook signature"
+            }),
+            content_type="application/json",
+            status=400
+        )
+
+    # ---------------------------------------------
+    # Get event information
+    # ---------------------------------------------
+
+    event_type = event["type"]
+
+    payment_intent = event["data"]["object"]
+
+    print(
+        "STRIPE WEBHOOK EVENT:",
+        event_type
+    )
+
+    print(
+        "STRIPE PAYMENT INTENT:",
+        payment_intent
+    )
+
+    # =================================================
+    # PAYMENT SUCCESSFUL
+    # =================================================
+
+    if event_type == "payment_intent.succeeded":
+
+        payment_intent_id = payment_intent.get("id")
+
+        payment_status = payment_intent.get("status")
+
+        amount_received = payment_intent.get(
+            "amount_received",
+            0
+        )
+
+        # Stripe currency
+        stripe_currency = payment_intent.get(
+            "currency"
+        )
+
+        print(
+            "STRIPE PAYMENT SUCCESS:",
+            payment_intent_id
+        )
+
+        print(
+            "STRIPE CURRENCY:",
+            stripe_currency
+        )
+
+        # ---------------------------------------------
+        # Find local transaction
+        # ---------------------------------------------
+
+        try:
+
+            transaction = (
+                models.OrderTransaction.objects.get(
+                    payment_id=payment_intent_id
+                )
+            )
+
+        except models.OrderTransaction.DoesNotExist:
+
+            print(
+                "Stripe transaction not found:",
+                payment_intent_id
+            )
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": True,
+                    "message":
+                        "Payment received but transaction not found",
+                    "payment_intent_id":
+                        payment_intent_id
+                }),
+                content_type="application/json",
+                status=200
+            )
+
+        # =================================================
+        # VALIDATE CURRENCY
+        # =================================================
+
+        expected_currency = str(
+            transaction.currency
+        ).strip().lower()
+
+        received_currency = str(
+            stripe_currency
+        ).strip().lower()
+
+        print(
+            "EXPECTED CURRENCY:",
+            expected_currency
+        )
+
+        print(
+            "RECEIVED CURRENCY:",
+            received_currency
+        )
+
+        if expected_currency != received_currency:
+
+            print(
+                "STRIPE CURRENCY MISMATCH:",
+                "Expected:",
+                expected_currency,
+                "Received:",
+                received_currency
+            )
+
+            transaction.status = "FAILED"
+
+            transaction.cash_status = "failed"
+
+            transaction.save(
+                update_fields=[
+                    "status",
+                    "cash_status"
+                ]
+            )
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error":
+                        "Stripe payment currency mismatch",
+                    "expected_currency":
+                        expected_currency.upper(),
+                    "received_currency":
+                        received_currency.upper(),
+                    "payment_intent_id":
+                        payment_intent_id
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        # ---------------------------------------------
+        # Validate payment amount
+        # ---------------------------------------------
+
+        zero_decimal_currencies = [
+            "xof",
+            "jpy",
+            "krw",
+            "vnd"
+        ]
+
+        if received_currency in zero_decimal_currencies:
+
+            expected_amount = int(
+                round(
+                    float(transaction.total_amount)
+                )
+            )
+
+        else:
+
+            expected_amount = int(
+                round(
+                    float(transaction.total_amount) * 100
+                )
+            )
+
+        # ---------------------------------------------
+        # Compare Stripe amount
+        # ---------------------------------------------
+
+        if amount_received != expected_amount:
+
+            print(
+                "STRIPE AMOUNT MISMATCH:",
+                "Expected:",
+                expected_amount,
+                "Received:",
+                amount_received
+            )
+
+            transaction.status = "FAILED"
+
+            transaction.cash_status = "failed"
+
+            transaction.save(
+                update_fields=[
+                    "status",
+                    "cash_status"
+                ]
+            )
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error":
+                        "Stripe payment amount mismatch",
+                    "expected_amount":
+                        expected_amount,
+                    "received_amount":
+                        amount_received,
+                    "currency":
+                        received_currency.upper(),
+                    "payment_intent_id":
+                        payment_intent_id
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        # =================================================
+        # UPDATE TRANSACTION
+        # =================================================
+
+        transaction.status = "PAID"
+
+        transaction.cash_status = "success"
+
+        # Keep Stripe currency
+        transaction.currency = received_currency.upper()
+
+        transaction.save(
+            update_fields=[
+                "status",
+                "cash_status",
+                "currency"
+            ]
+        )
+
+        print(
+            "Stripe transaction marked as PAID:",
+            transaction.id
+        )
+
+        print(
+            "Paid currency:",
+            transaction.currency
+        )
+
+    # =================================================
+    # PAYMENT FAILED
+    # =================================================
+
+    elif event_type == "payment_intent.payment_failed":
+
+        payment_intent_id = payment_intent.get("id")
+
+        print(
+            "STRIPE PAYMENT FAILED:",
+            payment_intent_id
+        )
+
+        try:
+
+            transaction = (
+                models.OrderTransaction.objects.get(
+                    payment_id=payment_intent_id
+                )
+            )
+
+            transaction.status = "FAILED"
+
+            transaction.cash_status = "failed"
+
+            transaction.save(
+                update_fields=[
+                    "status",
+                    "cash_status"
+                ]
+            )
+
+        except models.OrderTransaction.DoesNotExist:
+
+            print(
+                "Stripe failed transaction not found:",
+                payment_intent_id
+            )
+
+    # =================================================
+    # PAYMENT CANCELLED
+    # =================================================
+
+    elif event_type == "payment_intent.canceled":
+
+        payment_intent_id = payment_intent.get("id")
+
+        print(
+            "STRIPE PAYMENT CANCELLED:",
+            payment_intent_id
+        )
+
+        try:
+
+            transaction = (
+                models.OrderTransaction.objects.get(
+                    payment_id=payment_intent_id
+                )
+            )
+
+            transaction.status = "CANCELLED"
+
+            transaction.cash_status = "cancelled"
+
+            transaction.save(
+                update_fields=[
+                    "status",
+                    "cash_status"
+                ]
+            )
+
+        except models.OrderTransaction.DoesNotExist:
+
+            print(
+                "Stripe cancelled transaction not found:",
+                payment_intent_id
+            )
+
+    # =================================================
+    # OTHER STRIPE EVENTS
+    # =================================================
+
+    else:
+
+        print(
+            "Unhandled Stripe event:",
+            event_type
+        )
+
+    # ---------------------------------------------
+    # Response to Stripe
+    # ---------------------------------------------
+
+    return HttpResponse(
+        JSONRenderer().render({
+            "success": True,
+            "message":
+                "Stripe webhook received",
+            "event":
+                event_type
+        }),
+        content_type="application/json",
+        status=200
+    )
+
+
+@csrf_exempt
+def stripe_payment_status(request):
+
+    try:
+
+        # -----------------------------------------
+        # Validate request method
+        # -----------------------------------------
+
+        if request.method != "POST":
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "POST method required"
+                }),
+                content_type="application/json",
+                status=405
+            )
+
+        # -----------------------------------------
+        # Parse request
+        # -----------------------------------------
+
+        try:
+
+            python_data = JSONParser().parse(
+                io.BytesIO(request.body)
+            )
+
+        except Exception as e:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "Invalid JSON payload",
+                    "details": str(e)
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        # -----------------------------------------
+        # Get payment ID
+        # -----------------------------------------
+
+        payment_id = python_data.get("payment_id")
+
+        if not payment_id:
+
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "payment_id is required"
+                }),
+                content_type="application/json",
+                status=400
+            )
+
+        payment_id = str(payment_id).strip()
+
+        # -----------------------------------------
+        # Stripe configuration
+        # -----------------------------------------
+
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+
+        # -----------------------------------------
+        # Retrieve PaymentIntent from Stripe
+        # -----------------------------------------
+
+        payment_intent = stripe.PaymentIntent.retrieve(
+            payment_id
+        )
+
+        # -----------------------------------------
+        # Get Stripe information
+        # -----------------------------------------
+
+        payment_intent_id = payment_intent.id
+
+        stripe_status = payment_intent.status
+
+        stripe_amount = payment_intent.amount
+
+        stripe_amount_received = (
+            payment_intent.amount_received
+        )
+
+        stripe_currency = payment_intent.currency
+
+        # -----------------------------------------
+        # Convert Stripe amount to normal amount
+        # -----------------------------------------
+
+        zero_decimal_currencies = [
+            "xof",
+            "jpy",
+            "krw",
+            "vnd"
+        ]
+
+        if stripe_currency in zero_decimal_currencies:
+
+            actual_amount = stripe_amount
+
+            actual_amount_received = (
+                stripe_amount_received
+            )
+
+        else:
+
+            actual_amount = stripe_amount / 100
+
+            actual_amount_received = (
+                stripe_amount_received / 100
+            )
+
+        # -----------------------------------------
+        # Find local transaction
+        # -----------------------------------------
+
+        transaction = None
+
+        try:
+
+            transaction = (
+                models.OrderTransaction.objects.get(
+                    payment_id=payment_intent_id
+                )
+            )
+
+        except models.OrderTransaction.DoesNotExist:
+
+            transaction = None
+
+        # -----------------------------------------
+        # Determine payment status
+        # -----------------------------------------
+
+        if stripe_status == "succeeded":
+
+            payment_status = "PAID"
+
+        elif stripe_status == "processing":
+
+            payment_status = "PROCESSING"
+
+        elif stripe_status == "requires_payment_method":
+
+            payment_status = "PENDING"
+
+        elif stripe_status == "requires_action":
+
+            payment_status = "ACTION_REQUIRED"
+
+        elif stripe_status == "canceled":
+
+            payment_status = "CANCELLED"
+
+        else:
+
+            payment_status = stripe_status.upper()
+
+        # -----------------------------------------
+        # Update local transaction
+        # -----------------------------------------
+
+        if transaction:
+
+            if stripe_status == "succeeded":
+
+                transaction.status = "PAID"
+
+                transaction.cash_status = "success"
+
+                transaction.currency = (
+                    stripe_currency.upper()
+                )
+
+                transaction.save(
+                    update_fields=[
+                        "status",
+                        "cash_status",
+                        "currency"
+                    ]
+                )
+
+            elif stripe_status == "canceled":
+
+                transaction.status = "CANCELLED"
+
+                transaction.cash_status = "cancelled"
+
+                transaction.save(
+                    update_fields=[
+                        "status",
+                        "cash_status"
+                    ]
+                )
+
+            elif stripe_status == "requires_payment_method":
+
+                transaction.status = "PENDING"
+
+                transaction.cash_status = "pending"
+
+                transaction.save(
+                    update_fields=[
+                        "status",
+                        "cash_status"
+                    ]
+                )
+
+        # -----------------------------------------
+        # Response
+        # -----------------------------------------
+
+        return HttpResponse(
+            JSONRenderer().render({
+
+                "success": True,
+
+                "payment_found": True,
+
+                "payment_id":
+                    payment_intent_id,
+
+                "stripe_status":
+                    stripe_status,
+
+                "payment_status":
+                    payment_status,
+
+                "amount":
+                    actual_amount,
+
+                "amount_received":
+                    actual_amount_received,
+
+                "currency":
+                    stripe_currency.upper(),
+
+                "transaction_id":
+                    transaction.id
+                    if transaction else None,
+
+                "local_transaction_status":
+                    transaction.status
+                    if transaction else None,
+
+                "payment_initiated":
+                    True,
+
+                "payment_completed":
+                    stripe_status == "succeeded"
+
+            }),
+            content_type="application/json",
+            status=200
+        )
+
+    # ---------------------------------------------
+    # Stripe exception
+    # ---------------------------------------------
+
+    except stripe.error.InvalidRequestError as e:
+
+        print(
+            "STRIPE PAYMENT NOT FOUND:",
+            str(e)
+        )
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "payment_found": False,
+                "payment_initiated": False,
+                "error":
+                    "Payment not found in Stripe",
+                "details":
+                    str(e)
+            }),
+            content_type="application/json",
+            status=404
+        )
+
+    except stripe.error.StripeError as e:
+
+        print(
+            "STRIPE PAYMENT STATUS ERROR:",
+            str(e)
+        )
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Unable to check Stripe payment",
+                "details":
+                    str(e)
+            }),
+            content_type="application/json",
+            status=500
+        )
+
+    # ---------------------------------------------
+    # Generic exception
+    # ---------------------------------------------
+
+    except Exception as e:
+
+        print(
+            "PAYMENT STATUS ERROR:",
+            str(e)
+        )
+
+        return HttpResponse(
+            JSONRenderer().render({
+                "success": False,
+                "error":
+                    "Payment status check failed",
+                "details":
+                    str(e)
+            }),
+            content_type="application/json",
+            status=500
+        )

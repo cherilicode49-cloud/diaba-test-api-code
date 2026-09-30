@@ -280,6 +280,11 @@ urlpatterns = [
     # path("shipsgo/container-status/",shipsgo_container_status,name="shipsgo-container-status"),
     path("api/container_status_view/",container_status_view,name="container-status"),
 
+
+    path("api/initiate_stripe_payment/",initiate_stripe_payment,name="initiate_stripe_payment"),
+    path("api/stripe/webhook/",stripe_webhook,name="stripe_webhook"),
+    path("api/stripe_payment_status/",stripe_payment_status,name="stripe_payment_status"),
+
     ### Transaction 
     
     path('api/all_transaction_list_admin/',all_transaction_list_admin, name='all_transaction_list_admin'), #done
@@ -524,6 +529,7 @@ urlpatterns = [
     path('api/container_terms_list_admin/',container_terms_list_admin, name='container_terms_list_admin'), #done
     path('api/container_terms_list_app/',container_terms_list_app, name='container_terms_list_app'), #done
     
+    path('api/container_booking_fees_list/',container_booking_fees_list, name='container_booking_fees_list'), #done
 
 
 

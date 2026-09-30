@@ -14,7 +14,7 @@ from firebase_admin import messaging
 import requests
 from django.template.loader import get_template
 from django.core.mail import send_mail
-from diabaApp.serializer import ContainerRequestSerializer, ContainerTermsSerializer
+from diabaApp.serializer import ContainerRequestSerializer, ContainerTermsSerializer, ContainerBookingFeeSerializer
 import numpy as np
 
 BASE_URL = settings.BASE_URL
@@ -303,6 +303,37 @@ def container_terms_list_app(request):
             terms,
             many=True
         ).data
+
+        res = {
+            "data": serializer
+        }
+
+        return HttpResponse(
+            JSONRenderer().render(res),
+            content_type="application/json",
+            status=200
+        )
+
+    res = {
+        "message": "Invalid request method."
+    }
+
+    return HttpResponse(
+        JSONRenderer().render(res),
+        content_type="application/json",
+        status=405
+    )
+
+
+
+@csrf_exempt
+def container_booking_fees_list(request):
+
+    if request.method == "POST":
+
+        terms = models.ContainerBookingFee.objects.all().first()
+
+        serializer = ContainerBookingFeeSerializer(terms).data
 
         res = {
             "data": serializer
