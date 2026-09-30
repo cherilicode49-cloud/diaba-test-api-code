@@ -202,6 +202,7 @@ urlpatterns = [
     path('api/chat_history/',chat_history, name='chat_history'), #done
     path('api/chat_room_list/',chat_room_list, name='chat_room_list'), #done
     path('api/create_message/',create_message, name='create_message'), #done
+    path('api/delete_chat_message/',delete_chat_message, name='delete_chat_message'), #done
     path('api/agent_chat_room_list/',agent_chat_room_list, name='agent_chat_room_list'), #done
     path('api/chat_room_update/',chat_room_update, name='chat_room_update'), #done
     path('api/user_new_message_count/',user_new_message_count, name='user_new_message_count'), #done

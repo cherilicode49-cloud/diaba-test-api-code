@@ -1487,25 +1487,40 @@ class ChatConversionSerializer(serializers.ModelSerializer):
     send_time = serializers.SerializerMethodField()
     agent_type = serializers.SerializerMethodField()
     agent_name = serializers.SerializerMethodField()
+    deleted_at = serializers.SerializerMethodField()
+
     class Meta:
         model = models.ChatConversion
-        fields = ['id','user','admin','room','message','message_type','send_by','file','file_type','create_at','status','sender','send_time','agent_type','agent_name','message_french','product_id']
+        fields = ['id','user','admin','room','message','message_type','send_by','file','file_type','create_at','status','sender','send_time','agent_type','agent_name','message_french','product_id','is_deleted','deleted_at','deleted_by']
 
     def get_send_time(self, obj):
-        return obj.create_at.strftime('%Y-%m-%d %H:%M:%S')
+        return obj.create_at.strftime('%Y-%m-%d %H:%M:%S') if obj.create_at else None
+
+    def get_deleted_at(self, obj):
+        return obj.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if obj.deleted_at else None
     
     def get_agent_type(self, obj):
         if obj.chat_agent not in [None,'','null']:
             return obj.chat_agent.agent_type
-        
         return None
-    
     
     def get_agent_name(self, obj):
         if obj.chat_agent not in [None,'','null']:
             return obj.chat_agent.name
-        
         return "Agent"
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        user_type = self.context.get('user_type', None)
+        is_admin = str(user_type).lower() in ["admin"] if user_type else False
+
+        # If deleted and requester is NOT admin: mask the message and attachments
+        if instance.is_deleted and not is_admin:
+            data['message'] = "This message was deleted"
+            data['message_french'] = "Ce message a été supprimé"
+            data['file'] = None
+            data['file_type'] = None
+        return data
     
 
 class ChatRoomChatAgentDetailSerializer(serializers.ModelSerializer):
@@ -1534,35 +1549,35 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         fields = ['id','user','admin','room','created_at','user_name','user_email','user_country_code','user_mobile_number','unseen_count','last_message_detail','last_message','last_message_send_date','agent_detail','priority','is_resolved','note','last_message_type']
 
     def get_unseen_count(self, obj):
-        return models.ChatConversion.objects.filter(user__isnull = False, room = obj.id,status = "Unseen").count()
+        return models.ChatConversion.objects.filter(user__isnull = False, room = obj.id, status = "Unseen", is_deleted=False).count()
     
     def get_last_message(self, obj):
         last_message = models.ChatConversion.objects.filter(room = obj.id).last()
-        
         if last_message:
-            message = last_message.message
-        else:
-            message = ""
-        return message
+            if last_message.is_deleted:
+                return "This message was deleted"
+            return last_message.message if last_message.message else "📎 File"
+        return ""
     
     def get_last_message_send_date(self, obj):
-        return obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+        if obj.updated_at:
+            return obj.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+        return ""
     
     def get_last_message_detail(self, obj):
         last_message = models.ChatConversion.objects.filter(room = obj.id).last()
 
-        # print("Last message------>",last_message)
-
         if last_message:
-            message = last_message.message
+            message = "This message was deleted" if last_message.is_deleted else last_message.message
             send_by = last_message.send_by
         else:
             message = ""
             send_by = ""
         
         return {
-            'message':message,
-            'send_by':send_by
+            'message': message if message else "📎 File",
+            'send_by': send_by,
+            'is_deleted': last_message.is_deleted if last_message else False
         }
     
     def get_agent_detail(self, obj):
