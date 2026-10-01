@@ -1535,6 +1535,14 @@ class ChatConversionSerializer(serializers.ModelSerializer):
             send_by_str = str(instance.send_by).lower().strip() if instance.send_by else ""
             deleted_by_str = str(instance.deleted_by).lower().strip() if instance.deleted_by else ""
 
+            # ===== DEBUG: Remove after fixing =====
+            print(f"[DELETE-MSG-DEBUG] msg_id={instance.id}, context={self.context}")
+            print(f"[DELETE-MSG-DEBUG] user_type={user_type!r}, user_type_str={user_type_str!r}, user_id={user_id!r}, agent_id={agent_id!r}")
+            print(f"[DELETE-MSG-DEBUG] instance.send_by={instance.send_by!r}, send_by_str={send_by_str!r}")
+            print(f"[DELETE-MSG-DEBUG] instance.deleted_by={instance.deleted_by!r}, deleted_by_str={deleted_by_str!r}")
+            print(f"[DELETE-MSG-DEBUG] instance.user_id={instance.user_id!r}, instance.chat_agent_id={instance.chat_agent_id!r}")
+            # ===== END DEBUG =====
+
             # Check if this user is the one who deleted / sent the message
             is_own_deleted = False
             
@@ -1550,6 +1558,10 @@ class ChatConversionSerializer(serializers.ModelSerializer):
             elif user_type_str in ["agent", "chat_agent", "chatagent", "chatagentdetail"]:
                 if deleted_by_str in ["agent", "chat_agent", "chatagent", "chatagentdetail"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent", "chatagent", "chatagentdetail"]):
                     is_own_deleted = True
+
+            # ===== DEBUG: Remove after fixing =====
+            print(f"[DELETE-MSG-DEBUG] is_own_deleted={is_own_deleted}")
+            # ===== END DEBUG =====
 
             if is_own_deleted:
                 data['message'] = "You deleted this message."

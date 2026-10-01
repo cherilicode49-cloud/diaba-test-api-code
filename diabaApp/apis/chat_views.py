@@ -48,7 +48,10 @@ def chat_history(request):
         elif user_id:
             user_type = "User"
 
-    # print("python_data--ChatHIstory-->",python_data)
+    # ===== DEBUG: Remove after fixing =====
+    print(f"[CHAT-HISTORY-DEBUG] python_data={python_data}")
+    print(f"[CHAT-HISTORY-DEBUG] user_type={user_type!r}, user_id={user_id!r}, agent_id={agent_id!r}, admin_id={admin_id!r}")
+    # ===== END DEBUG =====
 
     messages = models.ChatConversion.objects.filter(room__room=room).order_by("create_at")
     messages_serializer = ChatConversionSerializer(
