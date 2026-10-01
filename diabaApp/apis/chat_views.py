@@ -35,18 +35,39 @@ def chat_history(request):
     python_data = JSONParser().parse(stream)
     
     room = python_data.get('room')
-    user_type = python_data.get('user_type',None)
+    user_type = python_data.get('user_type') or python_data.get('sender') or python_data.get('send_by') or python_data.get('role')
+    user_id = python_data.get('user_id')
+    agent_id = python_data.get('agent_id')
+    admin_id = python_data.get('admin_id')
+
+    if not user_type:
+        if admin_id:
+            user_type = "Admin"
+        elif agent_id:
+            user_type = "Agent"
+        elif user_id:
+            user_type = "User"
 
     # print("python_data--ChatHIstory-->",python_data)
 
     messages = models.ChatConversion.objects.filter(room__room=room).order_by("create_at")
-    messages_serializer = ChatConversionSerializer(messages, many=True, context={'user_type': user_type}).data
+    messages_serializer = ChatConversionSerializer(
+        messages, 
+        many=True, 
+        context={
+            'user_type': user_type,
+            'user_id': user_id,
+            'agent_id': agent_id,
+            'admin_id': admin_id
+        }
+    ).data
 
     # Update Unseen Message toooo Seen
-    if user_type in ["Agent","Admin"]:
-        models.ChatConversion.objects.filter(room__room=room, status = "Unseen").exclude(send_by__in = ["Agent","Admin"]).update(status = "Seen")
+    user_type_str = str(user_type).lower() if user_type else ""
+    if user_type_str in ["agent", "admin"]:
+        models.ChatConversion.objects.filter(room__room=room, status = "Unseen").exclude(send_by__in = ["Agent","Admin","agent","admin"]).update(status = "Seen")
     else:
-        models.ChatConversion.objects.filter(room__room=room, status = "Unseen").exclude(send_by = "User").update(status = "Seen")
+        models.ChatConversion.objects.filter(room__room=room, status = "Unseen").exclude(send_by__in = ["User", "user", "Customer", "customer"]).update(status = "Seen")
 
     res={
         'chat_data':messages_serializer,

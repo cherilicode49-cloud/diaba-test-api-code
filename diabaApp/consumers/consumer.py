@@ -548,12 +548,17 @@ async def delete_message(sid, data):
 
         # 3. Broadcast to Agent Room (for assigned agent)
         if agent_id:
+            deleted_by_role = str(msg_data.get("deleted_by") or sender_role).lower().strip()
+            agent_is_deleter = deleted_by_role in ["agent", "chat_agent", "chatagent", "chatagentdetail"]
+            agent_msg = "You deleted this message." if agent_is_deleter else "This message was deleted"
+            agent_msg_fr = "Vous avez supprimé ce message." if agent_is_deleter else "Ce message a été supprimé"
+
             await sio.emit("message_deleted", {
                 "id": msg_data["id"],
                 "room": room_name,
                 "is_deleted": True,
-                "message": "This message was deleted",
-                "message_french": "Ce message a été supprimé",
+                "message": agent_msg,
+                "message_french": agent_msg_fr,
                 "deleted_by": msg_data["deleted_by"],
                 "deleted_at": msg_data["deleted_at"],
                 "sender": sender_role,

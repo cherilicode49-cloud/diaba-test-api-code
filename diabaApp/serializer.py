@@ -1511,22 +1511,44 @@ class ChatConversionSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        user_type = self.context.get('user_type', None)
-        user_type_str = str(user_type).lower() if user_type else ""
+        
+        user_type = (
+            self.context.get('user_type') 
+            or self.context.get('sender') 
+            or self.context.get('send_by') 
+            or self.context.get('role')
+        )
+        user_id = self.context.get('user_id')
+        agent_id = self.context.get('agent_id')
+
+        user_type_str = str(user_type).lower().strip() if user_type else ""
+        if not user_type_str:
+            if user_id:
+                user_type_str = "user"
+            elif agent_id:
+                user_type_str = "agent"
+
         is_admin = user_type_str in ["admin"]
 
         # If deleted and requester is NOT admin: mask the message and attachments
         if instance.is_deleted and not is_admin:
-            send_by_str = str(instance.send_by).lower() if instance.send_by else ""
-            deleted_by_str = str(instance.deleted_by).lower() if instance.deleted_by else ""
+            send_by_str = str(instance.send_by).lower().strip() if instance.send_by else ""
+            deleted_by_str = str(instance.deleted_by).lower().strip() if instance.deleted_by else ""
 
             # Check if this user is the one who deleted / sent the message
             is_own_deleted = False
-            if user_type_str in ["user", "customer"]:
-                if deleted_by_str in ["user", "customer"] or (not deleted_by_str and send_by_str in ["user", "customer"]):
+            
+            # Check by specific ID match first if available
+            if user_id and instance.user_id and str(instance.user_id) == str(user_id):
+                is_own_deleted = True
+            elif agent_id and instance.chat_agent_id and str(instance.chat_agent_id) == str(agent_id):
+                is_own_deleted = True
+            # Check by role / user_type
+            elif user_type_str in ["user", "customer", "customerdetail"]:
+                if deleted_by_str in ["user", "customer", "customerdetail"] or (not deleted_by_str and send_by_str in ["user", "customer", "customerdetail"]):
                     is_own_deleted = True
-            elif user_type_str in ["agent", "chat_agent"]:
-                if deleted_by_str in ["agent", "chat_agent"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent"]):
+            elif user_type_str in ["agent", "chat_agent", "chatagent", "chatagentdetail"]:
+                if deleted_by_str in ["agent", "chat_agent", "chatagent", "chatagentdetail"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent", "chatagent", "chatagentdetail"]):
                     is_own_deleted = True
 
             if is_own_deleted:
