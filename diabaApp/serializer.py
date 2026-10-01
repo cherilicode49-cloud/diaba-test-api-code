@@ -1557,7 +1557,7 @@ class ChatConversionSerializer(serializers.ModelSerializer):
                     is_own_deleted = True
 
             if is_own_deleted:
-                data['message'] = "You deleted this message."
+                data['message'] = "You deleted this message"
                 data['message_french'] = "Vous avez supprimé ce message."
             else:
                 data['message'] = "This message was deleted"
@@ -1612,7 +1612,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     if deleted_by_str in ["agent", "chat_agent"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent"]):
                         is_own_deleted = True
 
-                return "You deleted this message." if is_own_deleted else "This message was deleted"
+                return "You deleted this message" if is_own_deleted else "This message was deleted"
             return last_message.message if last_message.message else "📎 File"
         return ""
     
@@ -1639,7 +1639,7 @@ class ChatRoomSerializer(serializers.ModelSerializer):
                     if deleted_by_str in ["agent", "chat_agent"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent"]):
                         is_own_deleted = True
 
-                message = "You deleted this message." if is_own_deleted else "This message was deleted"
+                message = "You deleted this message" if is_own_deleted else "This message was deleted"
             else:
                 message = last_message.message
             send_by = last_message.send_by
