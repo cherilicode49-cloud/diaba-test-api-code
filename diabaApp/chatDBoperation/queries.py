@@ -107,6 +107,7 @@ def get_recent_message(room):
         "original_message": recent_message.message,
         "is_deleted": recent_message.is_deleted,
         "send_by": recent_message.send_by,
+        "deleted_by": recent_message.deleted_by,
         "last_message_send_date": recent_message.create_at.strftime('%Y-%m-%d %H:%M:%S') if recent_message.create_at else ""
     }
 

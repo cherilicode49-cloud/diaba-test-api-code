@@ -8614,7 +8614,7 @@ def chat_history(request):
     # print("python_data--ChatHIstory-->",python_data)
 
     messages = models.ChatConversion.objects.filter(room__room=room).order_by("create_at")
-    messages_serializer = ChatConversionSerializer(messages, many=True).data
+    messages_serializer = ChatConversionSerializer(messages, many=True, context={'user_type': user_type}).data
 
     # Update Unseen Message toooo Seen
     if user_type in ["Agent","Admin"]:

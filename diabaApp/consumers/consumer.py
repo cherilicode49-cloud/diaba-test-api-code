@@ -521,7 +521,19 @@ async def delete_message(sid, data):
         room_name = data.get("room") or msg_data.get("room")
         agent_id = msg_data.get("agent_id")
 
-        # 1. Broadcast to Chat Room (for customer and current participant)
+        # 1. Broadcast to Deleter (Self)
+        await sio.emit("message_deleted", {
+            "id": msg_data["id"],
+            "room": room_name,
+            "is_deleted": True,
+            "message": "You deleted this message.",
+            "message_french": "Vous avez supprimé ce message.",
+            "deleted_by": msg_data["deleted_by"],
+            "deleted_at": msg_data["deleted_at"],
+            "sender": sender_role,
+        }, to=sid)
+
+        # 2. Broadcast to Chat Room (for other participants)
         if room_name:
             await sio.emit("message_deleted", {
                 "id": msg_data["id"],
@@ -532,9 +544,9 @@ async def delete_message(sid, data):
                 "deleted_by": msg_data["deleted_by"],
                 "deleted_at": msg_data["deleted_at"],
                 "sender": sender_role,
-            }, room=room_name)
+            }, room=room_name, skip_sid=sid)
 
-        # 2. Broadcast to Agent Room (for assigned agent)
+        # 3. Broadcast to Agent Room (for assigned agent)
         if agent_id:
             await sio.emit("message_deleted", {
                 "id": msg_data["id"],
@@ -545,9 +557,9 @@ async def delete_message(sid, data):
                 "deleted_by": msg_data["deleted_by"],
                 "deleted_at": msg_data["deleted_at"],
                 "sender": sender_role,
-            }, room=f"agent_{agent_id}")
+            }, room=f"agent_{agent_id}", skip_sid=sid)
 
-        # 3. Broadcast to Admins Room (Admin sees original message + deletion flag for audit)
+        # 4. Broadcast to Admins Room (Admin sees original message + deletion flag for audit)
         await sio.emit("message_deleted", {
             "id": msg_data["id"],
             "room": room_name,
@@ -557,7 +569,7 @@ async def delete_message(sid, data):
             "deleted_by": msg_data["deleted_by"],
             "deleted_at": msg_data["deleted_at"],
             "sender": sender_role,
-        }, room="admins")
+        }, room="admins", skip_sid=sid if str(sender_role).lower() == "admin" else None)
 
         # Emit confirmation back to caller
         await sio.emit("message_deleted_success", {

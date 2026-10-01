@@ -1512,12 +1512,29 @@ class ChatConversionSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         user_type = self.context.get('user_type', None)
-        is_admin = str(user_type).lower() in ["admin"] if user_type else False
+        user_type_str = str(user_type).lower() if user_type else ""
+        is_admin = user_type_str in ["admin"]
 
         # If deleted and requester is NOT admin: mask the message and attachments
         if instance.is_deleted and not is_admin:
-            data['message'] = "This message was deleted"
-            data['message_french'] = "Ce message a été supprimé"
+            send_by_str = str(instance.send_by).lower() if instance.send_by else ""
+            deleted_by_str = str(instance.deleted_by).lower() if instance.deleted_by else ""
+
+            # Check if this user is the one who deleted / sent the message
+            is_own_deleted = False
+            if user_type_str in ["user", "customer"]:
+                if deleted_by_str in ["user", "customer"] or (not deleted_by_str and send_by_str in ["user", "customer"]):
+                    is_own_deleted = True
+            elif user_type_str in ["agent", "chat_agent"]:
+                if deleted_by_str in ["agent", "chat_agent"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent"]):
+                    is_own_deleted = True
+
+            if is_own_deleted:
+                data['message'] = "You deleted this message."
+                data['message_french'] = "Vous avez supprimé ce message."
+            else:
+                data['message'] = "This message was deleted"
+                data['message_french'] = "Ce message a été supprimé"
             data['file'] = None
             data['file_type'] = None
         return data
@@ -1555,7 +1572,20 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         last_message = models.ChatConversion.objects.filter(room = obj.id).last()
         if last_message:
             if last_message.is_deleted:
-                return "This message was deleted"
+                user_type = self.context.get('user_type', None)
+                user_type_str = str(user_type).lower() if user_type else ""
+                send_by_str = str(last_message.send_by).lower() if last_message.send_by else ""
+                deleted_by_str = str(last_message.deleted_by).lower() if last_message.deleted_by else ""
+
+                is_own_deleted = False
+                if user_type_str in ["user", "customer"]:
+                    if deleted_by_str in ["user", "customer"] or (not deleted_by_str and send_by_str in ["user", "customer"]):
+                        is_own_deleted = True
+                elif user_type_str in ["agent", "chat_agent"]:
+                    if deleted_by_str in ["agent", "chat_agent"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent"]):
+                        is_own_deleted = True
+
+                return "You deleted this message." if is_own_deleted else "This message was deleted"
             return last_message.message if last_message.message else "📎 File"
         return ""
     
@@ -1568,7 +1598,23 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         last_message = models.ChatConversion.objects.filter(room = obj.id).last()
 
         if last_message:
-            message = "This message was deleted" if last_message.is_deleted else last_message.message
+            if last_message.is_deleted:
+                user_type = self.context.get('user_type', None)
+                user_type_str = str(user_type).lower() if user_type else ""
+                send_by_str = str(last_message.send_by).lower() if last_message.send_by else ""
+                deleted_by_str = str(last_message.deleted_by).lower() if last_message.deleted_by else ""
+
+                is_own_deleted = False
+                if user_type_str in ["user", "customer"]:
+                    if deleted_by_str in ["user", "customer"] or (not deleted_by_str and send_by_str in ["user", "customer"]):
+                        is_own_deleted = True
+                elif user_type_str in ["agent", "chat_agent"]:
+                    if deleted_by_str in ["agent", "chat_agent"] or (not deleted_by_str and send_by_str in ["agent", "chat_agent"]):
+                        is_own_deleted = True
+
+                message = "You deleted this message." if is_own_deleted else "This message was deleted"
+            else:
+                message = last_message.message
             send_by = last_message.send_by
         else:
             message = ""
