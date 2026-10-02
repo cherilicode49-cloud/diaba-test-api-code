@@ -331,10 +331,10 @@ def order_create(request):
         order_list_product = ProductOrderDetailOrderSerializer(order_data,many=True).data
 
         user = get_customer.name
-        get_address = models.CustomerAddressDetail.objects.get(id = customer_address)
-        street_address = get_address.street_address
-        city = get_address.city
-        country = get_address.country
+        # get_address = models.CustomerAddressDetail.objects.get(id = customer_address)
+        # street_address = get_address.street_address
+        # city = get_address.city
+        # country = get_address.country
         
         if int(discount_price.replace(' ', '').strip())== 0:
             discount_price = None
@@ -345,9 +345,9 @@ def order_create(request):
             'order_id': order_number,
             'date': date_time,
             'customer_name': user,
-            'street_address' : street_address,
-            'city' : city,
-            'country' : country,
+            # 'street_address' : street_address,
+            # 'city' : city,
+            # 'country' : country,
             'order_list_product' : order_list_product,
             'subtotal': original_total_amount,
             'discount_price': discount_price,
