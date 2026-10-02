@@ -78,16 +78,16 @@ def money_network_list(request):
 
         else:
            serializer = [{
-            "label": "Inquiry",
-            "value": "cash",
-            "icon": "https://diaba-live.s3.eu-west-3.amazonaws.com/image/network_icon/ic_cash_EG9Hcsv.png",
+            "label": "  ",
+            "value": "stripe",
+            "icon": "https://diaba-live.s3.amazonaws.com/image/network_icon/Stripe-Emblem-removebg-preview.png",
             }]
 
         if serializer == []:
            serializer = [{
-            "label": "Inquiry",
-            "value": "cash",
-            "icon": "https://diaba-live.s3.eu-west-3.amazonaws.com/image/network_icon/ic_cash_EG9Hcsv.png",
+            "label": "Stripe",
+            "value": "stripe",
+            "icon": "https://diaba-live.s3.amazonaws.com/image/network_icon/Stripe-Emblem-removebg-preview.png",
             }]
             
                 
