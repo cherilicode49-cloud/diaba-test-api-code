@@ -79,7 +79,7 @@ def order_create(request):
             print("payment_type----0-0-0000>",payment_type)
             check_gateway = models.MoneyNetwork.objects.get(value = network)
             if check_gateway.label.startswith(('Orange Money', 'Wave')):
-                price = math.ceil(total_price * 1.015)
+                price = math.ceil(total_price * 1.025)
                 tax_price = math.ceil(price - total_price) 
                 total_price = math.ceil(price)
                 result = APIDTSClient.cash_in(total_price, mobileNumber, network, currency)
@@ -336,7 +336,10 @@ def order_create(request):
         # city = get_address.city
         # country = get_address.country
         
-        if int(discount_price.replace(' ', '').strip())== 0:
+        try:
+            if not discount_price or int(str(discount_price).replace(' ', '').strip()) == 0:
+                discount_price = None
+        except (ValueError, TypeError):
             discount_price = None
         # print("STARTING OF EMAIL.......", discount_price)
         

@@ -709,7 +709,7 @@ def customer_wishlist_cart_list(request):
 
 
                         amount_to_paid = math.ceil(price_after_discount + total_air + total_ship + total_express)
-                        amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.015)
+                        amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.025)
                         # print(amount_to_paid_with_tax, 'amount_to_paid_with_tax')
                         
                         res={
@@ -734,7 +734,7 @@ def customer_wishlist_cart_list(request):
                         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=406)
                 else:
                     amount_to_paid = math.ceil(total_price + total_air + total_ship + total_express)
-                    amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.015)
+                    amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.025)
                     # print(amount_to_paid_with_tax, 'amount_to_paid_with_tax')
                     
                     res={
