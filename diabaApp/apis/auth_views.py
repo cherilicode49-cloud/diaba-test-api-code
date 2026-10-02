@@ -314,14 +314,14 @@ def customer_verify(request):
                 return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
             else:
                 res = {
-                    'message':"Invalid password. Please try again."        
+                    'message':"Invalid OTP. Please try again."        
                     }
                 json_data = JSONRenderer().render(res)
                 return HttpResponse(json_data, content_type= 'application/json', status=406)
 
         else:
             res = {
-                'message':"Invalid email. Please try again."        
+                'message':"Invalid mobile number. Please try again."        
                 }
             json_data = JSONRenderer().render(res)
             return HttpResponse(json_data, content_type= 'application/json', status=406)
