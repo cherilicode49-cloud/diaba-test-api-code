@@ -185,6 +185,18 @@ def create_wave_checkout(request):
         success_url = "https://diaba.store/payment-success/"
         error_url = "https://diaba.store/payment-failed/"
 
+        if currency == "USD" or currency == "usd":
+                        
+            return HttpResponse(JSONRenderer().render({
+                    "success": False,
+                    "message":
+                        "This currency is not accepted by wave.",
+                    
+                }
+                ),
+                content_type="application/json",
+                status=404)
+
 
         url = "https://api.wave.com/v1/checkout/sessions"
 
