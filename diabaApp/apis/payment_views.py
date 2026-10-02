@@ -185,7 +185,7 @@ def create_wave_checkout(request):
         success_url = "https://diaba.store/payment-success/"
         error_url = "https://diaba.store/payment-failed/"
         
-        if currency != "XOF" or currency != "XAF":
+        if currency != "XOF" and currency != "XAF":
                                 
                     return HttpResponse(JSONRenderer().render({
                             "success": False,
@@ -610,18 +610,19 @@ def initiate_bictorys_payment(request):
  
             "paymentReference":
                 payment_reference,
- 
-            # Existing Diaba deep-link / App Link /
-            # Universal Link URL.
-            #
-            # Bictorys redirects the user's browser
-            # here after successful payment.
+
+            # Dynamic Deep Link / Redirect URLs
+            # Defaults to direct app deep link: diaba://payment-success
             "successRedirectUrl":
-                "https://diaba.store/payment-success/",
- 
-            # Existing Diaba failure callback.
+                python_data.get("success_url")
+                or python_data.get("successRedirectUrl")
+                or f"diaba://payment-success?reference={payment_reference}",
+
+            # Dynamic Failure Deep Link
             "errorRedirectUrl":
-                "https://diaba.store/payment-failed/"
+                python_data.get("error_url")
+                or python_data.get("errorRedirectUrl")
+                or f"diaba://payment-failed?reference={payment_reference}"
         }
  
         print(
@@ -2300,18 +2301,19 @@ def initiate_bictorys_payment_for_inquiry(request):
  
             "paymentReference":
                 payment_reference,
- 
-            # Existing Diaba deep-link / App Link /
-            # Universal Link URL.
-            #
-            # Bictorys redirects the user's browser
-            # here after successful payment.
+
+            # Dynamic Deep Link / Redirect URLs
+            # Defaults to direct app deep link: diaba://inquiry-success
             "successRedirectUrl":
-                "https://diaba.store/inquiry-success/",
- 
-            # Existing Diaba failure callback.
+                python_data.get("success_url")
+                or python_data.get("successRedirectUrl")
+                or f"diaba://inquiry-success?reference={payment_reference}",
+
+            # Dynamic Failure Deep Link
             "errorRedirectUrl":
-                "https://diaba.store/inquiry-failed/"
+                python_data.get("error_url")
+                or python_data.get("errorRedirectUrl")
+                or f"diaba://inquiry-failed?reference={payment_reference}"
         }
  
         print(
