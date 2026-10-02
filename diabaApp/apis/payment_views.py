@@ -1523,6 +1523,18 @@ def bictorys_webhook(request):
             )
 
         # -----------------------------------------
+        # Extract and account for customer fees
+        # (e.g. Wave/Orange Money adds 1 XOF customer fee, so amount becomes 3.0 instead of 2.0)
+        # -----------------------------------------
+        customer_fees = 0.0
+        try:
+            customer_fees = float(data.get("customerFees") or 0)
+        except (ValueError, TypeError):
+            customer_fees = 0.0
+
+        webhook_base_amount = round(webhook_amount - customer_fees, 2)
+
+        # -----------------------------------------
         # Validate currency
         # -----------------------------------------
 
@@ -1545,9 +1557,10 @@ def bictorys_webhook(request):
 
             # -------------------------------------
             # Validate amount
+            # Accepts exact total amount OR base amount (total - customer fees)
             # -------------------------------------
 
-            if webhook_amount != local_amount:
+            if local_amount != webhook_amount and local_amount != webhook_base_amount:
 
                 print(
                     "BICTORYS WEBHOOK ERROR: "
@@ -1557,6 +1570,10 @@ def bictorys_webhook(request):
                             payment_reference,
                         "webhook_amount":
                             webhook_amount,
+                        "customer_fees":
+                            customer_fees,
+                        "webhook_base_amount":
+                            webhook_base_amount,
                         "local_amount":
                             local_amount
                     }
