@@ -185,7 +185,7 @@ def create_wave_checkout(request):
         success_url = "https://diaba.store/payment-success/"
         error_url = "https://diaba.store/payment-failed/"
         
-        if currency != "XOF" or currency != "XAF":
+        if currency != "XOF" and currency != "XAF":
                                 
                     return HttpResponse(JSONRenderer().render({
                             "success": False,

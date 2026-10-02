@@ -497,7 +497,7 @@ def customer_wishlist_cart_list(request):
                 cart_data = models.CartDetail.objects.filter(customer= customer,  product__status = 'Active')
                 # cart_serializer = CartDetailSerializer(cart_data, many=True).data
                 cart_data_list = []
-
+                
                 if not models.CountryWithCurrency.objects.filter(Q(country_calling_code = user.countryCode) | Q(country_name = user.country)).exists():
                     country = "Egypt"
                     for product in cart_data:
@@ -519,8 +519,8 @@ def customer_wishlist_cart_list(request):
                         # 'product_total':product_total,
                         # 'price_by_air':price_by_air,
                         # 'price_by_ship':price_by_ship
-                        'message_en':'Cannot Place Order Outside Africa Continent',
-                        'message_fr':'Impossible de passer commande en dehors du continent africain.'
+                        'message_en':'Currently not serve in your region',
+                        'message_fr':'Actuellement non desservi dans votre region'
                     }                    
                     return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
                 
