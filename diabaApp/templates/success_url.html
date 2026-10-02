@@ -86,13 +86,32 @@
     }
 
     .lang-btn.active {
+    .btn-return {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 12px 28px;
       background: #0d6efd;
-      color: #fff;
-      border-color: #0d6efd;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 15px;
+      box-shadow: 0 4px 12px rgba(13, 110, 253, 0.3);
+      transition: background 0.2s;
+    }
+
+    .btn-return:hover {
+      background: #0b5ed7;
     }
   </style>
 
   <script>
+    function getDeepLink() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const ref = urlParams.get('reference') || '{{ reference }}' || '';
+      return 'diaba://payment-success' + (ref ? '?reference=' + encodeURIComponent(ref) : '');
+    }
+
     function switchLang(lang) {
       document.getElementById("en").style.display =
         lang === "en" ? "block" : "none";
@@ -108,6 +127,21 @@
         lang === "fr"
       );
     }
+
+    window.onload = function() {
+      const deepLink = getDeepLink();
+      
+      // Update link buttons
+      const btnEn = document.getElementById("link-en");
+      const btnFr = document.getElementById("link-fr");
+      if (btnEn) btnEn.href = deepLink;
+      if (btnFr) btnFr.href = deepLink;
+
+      // Auto-redirect to Diaba mobile app
+      setTimeout(function() {
+        window.location.href = deepLink;
+      }, 300);
+    };
   </script>
 </head>
 
@@ -137,12 +171,12 @@
       <h1>Payment Successful</h1>
       <p>
         Your payment has been completed successfully.<br />
-        Please return to the <strong>Diaba App</strong> to continue.
+        Redirecting you to the <strong>Diaba App</strong>...
       </p>
-      <a href="diaba://payment-success";>Click Here </a>
+      <a id="link-en" href="diaba://payment-success" class="btn-return">Open Diaba App</a>
 
-      <div class="note">
-        Please switch back to it manually.
+      <div class="note" style="margin-top: 16px;">
+        Click above if not redirected automatically.
       </div>
     </div>
 
@@ -151,13 +185,12 @@
       <h1>Paiement réussi</h1>
       <p>
         Votre paiement a été effectué avec succès.<br />
-        Veuillez retourner sur l’application <strong>Diaba</strong> pour
-        continuer.
+        Redirection vers l’application <strong>Diaba</strong>...
       </p>
-      <a href="diaba://payment-success";>Click Here </a>
+      <a id="link-fr" href="diaba://payment-success" class="btn-return">Ouvrir Diaba</a>
 
-      <div class="note">
-        Veuillez y revenir manuellement.
+      <div class="note" style="margin-top: 16px;">
+        Cliquez ci-dessus si la redirection ne s'effectue pas automatiquement.
       </div>
     </div>
   </div>

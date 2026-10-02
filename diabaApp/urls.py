@@ -281,6 +281,14 @@ urlpatterns = [
     # path("shipsgo/container-status/",shipsgo_container_status,name="shipsgo-container-status"),
     path("api/container_status_view/",container_status_view,name="container-status"),
 
+    # Payment Bridge Redirect Pages (Bictorys / Wave / Mobile return)
+    path("payment-success/", success_url, name="payment_success"),
+    path("payment-failed/", error_url, name="payment_failed"),
+    path("inquiry-success/", success_url, name="inquiry_success"),
+    path("inquiry-failed/", error_url, name="inquiry_failed"),
+    path("api/payment-success/", success_url, name="api_payment_success"),
+    path("api/payment-failed/", error_url, name="api_payment_failed"),
+
 
     path("api/initiate_stripe_payment/",initiate_stripe_payment,name="initiate_stripe_payment"),
     path("api/stripe/webhook/",stripe_webhook,name="stripe_webhook"),

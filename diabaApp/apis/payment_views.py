@@ -185,7 +185,7 @@ def create_wave_checkout(request):
         success_url = "https://diaba.store/payment-success/"
         error_url = "https://diaba.store/payment-failed/"
         
-        if currency != "XOF" and currency != "XAF":
+        if currency != "XOF" or currency != "XAF":
                                 
                     return HttpResponse(JSONRenderer().render({
                             "success": False,
@@ -409,10 +409,12 @@ def pay_pix_test(request):
 
 
 def success_url(request):
-    return render(request, "success_url.html")
+    reference = request.GET.get("reference", "")
+    return render(request, "success_url.html", {"reference": reference})
 
 def error_url(request):
-    return render(request, "error_url.html")
+    reference = request.GET.get("reference", "")
+    return render(request, "error_url.html", {"reference": reference})
 
 
 @csrf_exempt
@@ -612,17 +614,17 @@ def initiate_bictorys_payment(request):
                 payment_reference,
 
             # Dynamic Deep Link / Redirect URLs
-            # Defaults to direct app deep link: diaba://payment-success
+            # Defaults to HTTPS Web Bridge: https://diaba.store/payment-success/
             "successRedirectUrl":
                 python_data.get("success_url")
                 or python_data.get("successRedirectUrl")
-                or f"diaba://payment-success?reference={payment_reference}",
+                or f"https://diaba.store/payment-success/?reference={payment_reference}",
 
-            # Dynamic Failure Deep Link
+            # Dynamic Failure Redirect URL
             "errorRedirectUrl":
                 python_data.get("error_url")
                 or python_data.get("errorRedirectUrl")
-                or f"diaba://payment-failed?reference={payment_reference}"
+                or f"https://diaba.store/payment-failed/?reference={payment_reference}"
         }
  
         print(
@@ -1520,15 +1522,6 @@ def bictorys_webhook(request):
                 status=400
             )
 
-        # Extract customer fees if added by payment provider (e.g. Wave/Orange Money)
-        customer_fees = 0.0
-        try:
-            customer_fees = float(data.get("customerFees") or 0)
-        except (ValueError, TypeError):
-            customer_fees = 0.0
-
-        webhook_base_amount = round(webhook_amount - customer_fees, 2)
-
         # -----------------------------------------
         # Validate currency
         # -----------------------------------------
@@ -1552,10 +1545,9 @@ def bictorys_webhook(request):
 
             # -------------------------------------
             # Validate amount
-            # Accepts exact total amount OR base amount (total - customer fees)
             # -------------------------------------
 
-            if local_amount != webhook_amount and local_amount != webhook_base_amount:
+            if webhook_amount != local_amount:
 
                 print(
                     "BICTORYS WEBHOOK ERROR: "
@@ -1565,10 +1557,6 @@ def bictorys_webhook(request):
                             payment_reference,
                         "webhook_amount":
                             webhook_amount,
-                        "customer_fees":
-                            customer_fees,
-                        "webhook_base_amount":
-                            webhook_base_amount,
                         "local_amount":
                             local_amount
                     }
@@ -2317,17 +2305,17 @@ def initiate_bictorys_payment_for_inquiry(request):
                 payment_reference,
 
             # Dynamic Deep Link / Redirect URLs
-            # Defaults to direct app deep link: diaba://inquiry-success
+            # Defaults to HTTPS Web Bridge: https://diaba.store/inquiry-success/
             "successRedirectUrl":
                 python_data.get("success_url")
                 or python_data.get("successRedirectUrl")
-                or f"diaba://inquiry-success?reference={payment_reference}",
+                or f"https://diaba.store/inquiry-success/?reference={payment_reference}",
 
-            # Dynamic Failure Deep Link
+            # Dynamic Failure Redirect URL
             "errorRedirectUrl":
                 python_data.get("error_url")
                 or python_data.get("errorRedirectUrl")
-                or f"diaba://inquiry-failed?reference={payment_reference}"
+                or f"https://diaba.store/inquiry-failed/?reference={payment_reference}"
         }
  
         print(

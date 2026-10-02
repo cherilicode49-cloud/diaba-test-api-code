@@ -86,13 +86,32 @@
     }
 
     .lang-btn.active {
+    .btn-return {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 12px 28px;
       background: #dc3545;
-      color: #fff;
-      border-color: #dc3545;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 15px;
+      box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3);
+      transition: background 0.2s;
+    }
+
+    .btn-return:hover {
+      background: #bb2d3b;
     }
   </style>
 
   <script>
+    function getDeepLink() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const ref = urlParams.get('reference') || '{{ reference }}' || '';
+      return 'diaba://payment-failed' + (ref ? '?reference=' + encodeURIComponent(ref) : '');
+    }
+
     function switchLang(lang) {
       document.getElementById("en").style.display =
         lang === "en" ? "block" : "none";
@@ -108,6 +127,18 @@
         lang === "fr"
       );
     }
+
+    window.onload = function() {
+      const deepLink = getDeepLink();
+      const btnEn = document.getElementById("link-en");
+      const btnFr = document.getElementById("link-fr");
+      if (btnEn) btnEn.href = deepLink;
+      if (btnFr) btnFr.href = deepLink;
+
+      setTimeout(function() {
+        window.location.href = deepLink;
+      }, 500);
+    };
   </script>
 </head>
 
@@ -137,11 +168,11 @@
       <h1>Payment Failed</h1>
       <p>
         Unfortunately, your payment could not be completed.<br />
-        No amount has been deducted.
+        Returning to the <strong>Diaba App</strong>...
       </p>
-      <div class="note">
-        Please return to the <strong>Diaba App</strong> and try again or choose a
-        different payment method.
+      <a id="link-en" href="diaba://payment-failed" class="btn-return">Return to Diaba App</a>
+      <div class="note" style="margin-top: 16px;">
+        Click above if not redirected automatically.
       </div>
     </div>
 
@@ -150,11 +181,11 @@
       <h1>Paiement échoué</h1>
       <p>
         Malheureusement, votre paiement n’a pas pu être effectué.<br />
-        Aucun montant n’a été débité.
+        Redirection vers l’application <strong>Diaba</strong>...
       </p>
-      <div class="note">
-        Veuillez retourner sur l’application <strong>Diaba</strong> et réessayer
-        ou choisir un autre moyen de paiement.
+      <a id="link-fr" href="diaba://payment-failed" class="btn-return">Retourner sur Diaba</a>
+      <div class="note" style="margin-top: 16px;">
+        Cliquez ci-dessus si la redirection ne s'effectue pas automatiquement.
       </div>
     </div>
   </div>
