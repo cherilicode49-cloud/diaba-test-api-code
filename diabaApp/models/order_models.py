@@ -32,8 +32,11 @@ class OrderDetail(models.Model):
     status = models.CharField(max_length=100, verbose_name="status", null=True)
     order_from = models.CharField(max_length=100, verbose_name="order_from", null=True, default='App')
     is_order_track = models.BooleanField(default=False, verbose_name="is_order_track", null=True)
+    is_deleted = models.BooleanField(default=False, verbose_name="is deleted", db_index=True)
+    deleted_at = models.DateTimeField(verbose_name="deleted at", null=True, blank=True)
     
     created_at = models.DateTimeField(verbose_name="created at",auto_now_add=True, null= True)
+
     expire_at = models.DateTimeField(verbose_name='Expire At', null=True, blank=True)
 
     def __str__(self):

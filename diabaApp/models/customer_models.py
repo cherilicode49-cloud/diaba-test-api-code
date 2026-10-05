@@ -23,8 +23,11 @@ class CustomerDetail(models.Model):
     OTP = models.CharField(max_length=50, blank=True, null=True, verbose_name='OTP')
     password = models.CharField(max_length=50, blank=True, null=True, verbose_name='password')
     status = models.CharField(max_length=10, verbose_name="is User Active", default='Active', null= True)
+    is_deleted = models.BooleanField(default=False, verbose_name="is deleted", db_index=True)
+    deleted_at = models.DateTimeField(verbose_name="deleted at", null=True, blank=True)
     created_at = models.CharField(max_length=100, verbose_name="created at", null= True)
     created_at_datetime = models.DateTimeField(verbose_name="created at", null= True, blank=True, default=datetime.now())
+
     
      
     def __str__(self):

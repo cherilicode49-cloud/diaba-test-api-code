@@ -2651,13 +2651,29 @@ def product_delete(request):
 
         id = python_data.get('id')
 
-        get_product = models.ProductDetail.objects.get(id=id)
-        get_product.delete()
+        check_product = models.ProductDetail.objects.filter(id=id).count()
+        if check_product == 1:
+            get_product = models.ProductDetail.objects.get(id=id)
+            get_product.is_deleted = True
+            get_product.status = 'Inactive'
+            get_product.deleted_at = datetime.now()
+            get_product.save()
 
-        res={
-            'message':'Product Deleted Successfully'
-        }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+            # Clean active cart items for this product
+            models.CartDetail.objects.filter(product=id).delete()
+
+            res={
+                'status': True,
+                'message':'Product Deleted Successfully'
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+        else:
+            res={
+                'status': False,
+                'message':'Product not found'
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=404)
+
 
 
 @csrf_exempt

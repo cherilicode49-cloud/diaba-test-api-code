@@ -1652,44 +1652,31 @@ def vendor_variant_order_status_update(request):
 def order_delete_admin(request):
     if request.method == "POST":
         python_data = JSONParser().parse(io.BytesIO(request.body))
-        order = python_data.get('id')
+        order_id = python_data.get('id')
         
-        product = models.ProductOrderDetail.objects.filter(order=order)
-        if product.exists():
-            product.delete()
+        check_order = models.OrderDetail.objects.filter(id=order_id)
+        if check_order.exists():
+            order_obj = check_order.first()
+            order_obj.is_deleted = True
+            order_obj.deleted_at = datetime.now()
+            order_obj.order_status = 'cancelled'
+            order_obj.save()
 
-        vendor = models.VendorOrderDetail.objects.filter(order=order)
-        if vendor.exists():
-            vendor.delete()
+            # Mark order tracking status
+            models.OrderTracking.objects.filter(order=order_id).update(status="cancelled")
 
-        vendor_tracking = models.VendorOrderTracking.objects.filter(order=order)
-        if vendor_tracking.exists():
-            vendor_tracking.delete()
-        
-        order_tracking = models.OrderTracking.objects.filter(order=order)
-        if order_tracking.exists():
-            order_tracking.delete()
-        
-        order_transaction = models.OrderTransaction.objects.filter(order=order)
-        if order_transaction.exists():
-            order_transaction.delete()
-        
-        promocode = models.PromocodeTracking.objects.filter(order=order)
-        if promocode.exists():
-            promocode.delete()
-                
-        commission = models.PromocodeCommissionDetail.objects.filter(order=order)
-        if commission.exists():
-            commission.delete()
+            res = {
+                'status': True,
+                'message': "Order Soft Deleted Successfully."
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 200)
+        else:
+            res = {
+                'status': False,
+                'message': "Order not found."
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 404)
 
-        order = models.OrderDetail.objects.filter(id=order)
-        if order.exists():
-            order.delete()
-        
-        res = {
-            'data':"serialser"
-        }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 200)
 
     
 @csrf_exempt

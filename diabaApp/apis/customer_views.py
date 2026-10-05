@@ -285,36 +285,32 @@ def customer_list_admin(request):
 def customer_delete(request):
     if request.method == "POST":
         python_data = JSONParser().parse(io.BytesIO(request.body))
-        # print(python_data ,'python_data')
-        customer = python_data.get('user_id')
+        customer = python_data.get('user_id') or python_data.get('customer')
 
-        login_data = models.CustomerLogin.objects.filter(customer= customer)
-        login_data.delete()
+        check_customer = models.CustomerDetail.objects.filter(id=customer)
+        if check_customer.exists():
+            cust_obj = check_customer.first()
+            cust_obj.is_deleted = True
+            cust_obj.status = 'Inactive'
+            cust_obj.deleted_at = datetime.now()
+            cust_obj.save()
 
-        address_data = models.CustomerAddressDetail.objects.filter(customer= customer)
-        address_data.delete()
+            # Clear temporary session data & cart
+            models.CustomerLogin.objects.filter(customer=customer).delete()
+            models.CartDetail.objects.filter(customer=customer).delete()
 
-        wishlist_data = models.WishlistDetail.objects.filter(customer= customer)
-        wishlist_data.delete()
+            res = {
+                'status': True,
+                'message': "Your account has been deleted successfully."
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+        else:
+            res = {
+                'status': False,
+                'message': "Customer not found."
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=404)
 
-        cart_data = models.CartDetail.objects.filter(customer= customer)
-        cart_data.delete()
-
-        # order_data = models.OrderDetail.objects.filter(customer= customer)
-        # for order in order_data:
-        #     order = models.OrderDetail.objects.filter(id = order.id)
-        #     tracking_data = models.OrderTracking.objects.filter(order = order.id)
-        #     tracking_data.delete()
-        #     order.delete()
-
-        customer_data = models.CustomerDetail.objects.filter(id= customer)
-        customer_data.delete()
-
-        
-        res={
-            'message':"Your account has been deleted successfully."
-        }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
 
 
 
