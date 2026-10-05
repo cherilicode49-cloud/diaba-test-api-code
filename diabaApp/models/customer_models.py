@@ -117,6 +117,7 @@ class UserActivity(models.Model):
 
     # Payment details
     payment_method = models.CharField(max_length=100, null=True, blank=True, db_index=True)
+    payment_gateway = models.CharField(max_length=100, null=True, blank=True, db_index=True)
 
     # Search & Category
     search_keyword = models.CharField(max_length=255, null=True, blank=True)
@@ -140,9 +141,11 @@ class UserActivity(models.Model):
             models.Index(fields=['customer', 'action_type']),
             models.Index(fields=['product_name', 'action_type']),
             models.Index(fields=['payment_method', 'created_at']),
+            models.Index(fields=['payment_gateway', 'created_at']),
         ]
         verbose_name = 'User Activity'
         verbose_name_plural = 'User Activities'
+
 
     def __str__(self):
         user_id = self.customer.name if (self.customer and self.customer.name) else (self.customer_id or self.device_id or 'Guest')

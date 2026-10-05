@@ -41,6 +41,7 @@ def log_user_activity(request):
         product_id = python_data.get('product_id') or python_data.get('product')
         product_name = python_data.get('product_name')
         payment_method = python_data.get('payment_method') or python_data.get('payment_type')
+        payment_gateway = python_data.get('payment_gateway') or python_data.get('gateway')
         search_keyword = python_data.get('search_keyword') or python_data.get('search')
         category_name = python_data.get('category_name')
         metadata = python_data.get('metadata', {})
@@ -55,6 +56,7 @@ def log_user_activity(request):
             product_id=product_id,
             product_name=product_name,
             payment_method=payment_method,
+            payment_gateway=payment_gateway,
             search_keyword=search_keyword,
             category_name=category_name,
             metadata=metadata,
@@ -79,7 +81,7 @@ def log_user_activity(request):
 @csrf_exempt
 def get_user_activity_list(request):
     """
-    API to fetch activity logs with filters (by customer, action_type, device_id, date range).
+    API to fetch activity logs with filters (by customer, action_type, payment_gateway, device_id, date range).
     """
     if request.method == 'POST':
         try:
@@ -89,6 +91,7 @@ def get_user_activity_list(request):
 
         customer_id = python_data.get('customer_id') or python_data.get('customer')
         action_type = python_data.get('action_type')
+        payment_gateway = python_data.get('payment_gateway')
         device_id = python_data.get('device_id')
         limit = int(python_data.get('limit', 50))
         offset = int(python_data.get('offset', 0))
@@ -99,6 +102,8 @@ def get_user_activity_list(request):
             queryset = queryset.filter(customer_id=customer_id)
         if action_type:
             queryset = queryset.filter(action_type=action_type)
+        if payment_gateway:
+            queryset = queryset.filter(payment_gateway__iexact=payment_gateway)
         if device_id:
             queryset = queryset.filter(device_id=device_id)
 
@@ -119,7 +124,7 @@ def get_user_activity_analytics(request):
     """
     API for Admin Analytics Dashboard:
     - Most visited products
-    - Most selected payment methods
+    - Most selected payment methods & gateways
     - Top search keywords
     - Activity distribution by action_type
     """
@@ -146,7 +151,7 @@ def get_user_activity_analytics(request):
 
         # 2. Most Selected Payment Methods
         top_payments = list(
-            base_qs.filter(action_type='PAYMENT_METHOD_SELECT')
+            base_qs.filter(action_type__in=['PAYMENT_METHOD_SELECT', 'ORDER_PLACED'])
             .exclude(payment_method__isnull=True)
             .exclude(payment_method='')
             .values('payment_method')
@@ -154,7 +159,17 @@ def get_user_activity_analytics(request):
             .order_by('-select_count')
         )
 
-        # 3. Top Searches
+        # 3. Most Used Payment Gateways
+        top_gateways = list(
+            base_qs.filter(action_type__in=['PAYMENT_METHOD_SELECT', 'ORDER_PLACED'])
+            .exclude(payment_gateway__isnull=True)
+            .exclude(payment_gateway='')
+            .values('payment_gateway')
+            .annotate(usage_count=Count('id'))
+            .order_by('-usage_count')
+        )
+
+        # 4. Top Searches
         top_searches = list(
             base_qs.filter(action_type='SEARCH')
             .exclude(search_keyword__isnull=True)
@@ -164,7 +179,7 @@ def get_user_activity_analytics(request):
             .order_by('-search_count')[:10]
         )
 
-        # 4. Action Type Breakdown
+        # 5. Action Type Breakdown
         action_breakdown = list(
             base_qs.values('action_type')
             .annotate(total=Count('id'))
@@ -177,6 +192,7 @@ def get_user_activity_analytics(request):
             'data': {
                 'top_products': top_products,
                 'top_payments': top_payments,
+                'top_gateways': top_gateways,
                 'top_searches': top_searches,
                 'action_breakdown': action_breakdown
             }
