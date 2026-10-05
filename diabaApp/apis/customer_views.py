@@ -20,6 +20,7 @@ import numpy as np
 import  requests
 from diabaApp.serializer import CustomerDetailSerializer, CustomerAddressDetailSerializer, OrderDetailDataSerializer, \
     ProductOrderDetailSerializer, CartDetailSerializer, WishlistDetailSerializer
+from diabaApp.utils import track_user_activity
 
 
 @csrf_exempt
@@ -495,6 +496,13 @@ def customer_wishlist_cart_list(request):
             elif flag == 'cart':
                 
                 cart_data = models.CartDetail.objects.filter(customer= customer,  product__status = 'Active')
+                track_user_activity(
+                    action_type='CHECKOUT_INITIATE',
+                    customer_id=customer,
+                    country=country,
+                    metadata={'items_count': cart_data.count()},
+                    ip_address=ip_address or request.META.get('REMOTE_ADDR')
+                )
                 # cart_serializer = CartDetailSerializer(cart_data, many=True).data
                 cart_data_list = []
                 

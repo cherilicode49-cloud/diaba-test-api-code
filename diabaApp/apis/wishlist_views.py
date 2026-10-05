@@ -27,6 +27,7 @@ from PIL import Image
 from io import BytesIO
 import os 
 from diabaApp.serializer import ProductRequestSerializer
+from diabaApp.utils import track_user_activity
 
 
 
@@ -44,6 +45,9 @@ def add_to_wishlist(request):
         if check_customer == 1:
             check_product = models.ProductDetail.objects.filter(id = product).count()
             if check_product == 1:
+                prod_obj = models.ProductDetail.objects.filter(id=product).first()
+                product_name = prod_obj.product_name if prod_obj else None
+
                 check_wishlist = models.WishlistDetail.objects.filter(customer= customer,product=product).count()
                 if check_wishlist == 0:
                     create = models.WishlistDetail.objects.create(
@@ -52,6 +56,15 @@ def add_to_wishlist(request):
                         created_at = date_time
                     ).save()
                     
+                    track_user_activity(
+                        action_type='PRODUCT_WISHLIST',
+                        customer_id=customer,
+                        product_id=product,
+                        product_name=product_name,
+                        metadata={'action': 'added_to_wishlist'},
+                        ip_address=request.META.get('REMOTE_ADDR')
+                    )
+
                     res={
                         'message':"Product successfully added to your wishlist."
                     }
@@ -60,6 +73,15 @@ def add_to_wishlist(request):
                 if check_wishlist == 1:
                     delete_data = models.WishlistDetail.objects.get(customer_id= customer,product_id=product)
                     delete_data.delete()
+
+                    track_user_activity(
+                        action_type='PRODUCT_WISHLIST',
+                        customer_id=customer,
+                        product_id=product,
+                        product_name=product_name,
+                        metadata={'action': 'removed_from_wishlist'},
+                        ip_address=request.META.get('REMOTE_ADDR')
+                    )
 
                     res={
                         'message':"Product removed from your wishlist."
@@ -106,6 +128,9 @@ def add_to_cart(request):
             if check_customer == 1:
                 check_product = models.ProductDetail.objects.filter(id = product).count()
                 if check_product == 1:
+                    prod_obj = models.ProductDetail.objects.filter(id=product).first()
+                    product_name = prod_obj.product_name if prod_obj else None
+
                     check_cart = models.CartDetail.objects.filter(customer= customer,product=product, variant = variant).count()
                     # print(check_cart, 'check_cartcheck_cart')
                     if check_cart == 0:
@@ -118,6 +143,15 @@ def add_to_cart(request):
                             created_at = date_time
                         ).save()
                         
+                        track_user_activity(
+                            action_type='ADD_TO_CART',
+                            customer_id=customer,
+                            product_id=product,
+                            product_name=product_name,
+                            metadata={'variant_id': variant, 'quantity': quantity, 'shipping_via': shipping_via},
+                            ip_address=request.META.get('REMOTE_ADDR')
+                        )
+
                         res={
                             'message':"Product successfully added to your cart."
                         }
@@ -133,6 +167,15 @@ def add_to_cart(request):
                         cart_update.quantity = add_variant
                         cart_update.save()
                         
+                        track_user_activity(
+                            action_type='ADD_TO_CART',
+                            customer_id=customer,
+                            product_id=product,
+                            product_name=product_name,
+                            metadata={'variant_id': variant, 'quantity': add_variant, 'shipping_via': shipping_via, 'action': 'update_qty'},
+                            ip_address=request.META.get('REMOTE_ADDR')
+                        )
+
                         res={
                             'message':"Product successfully added to your cart."
                         }
@@ -149,6 +192,19 @@ def product_remove_from_cart(request):
         check_cart = models.CartDetail.objects.filter(id= cart).count()
         if check_cart == 1:
             cart_data = models.CartDetail.objects.get(id = cart)
+            customer_id = cart_data.customer_id
+            product_id = cart_data.product_id
+            product_name = cart_data.product.product_name if cart_data.product else None
+
+            track_user_activity(
+                action_type='REMOVE_FROM_CART',
+                customer_id=customer_id,
+                product_id=product_id,
+                product_name=product_name,
+                metadata={'cart_id': cart, 'quantity': cart_data.quantity},
+                ip_address=request.META.get('REMOTE_ADDR')
+            )
+
             cart_data.delete()
 
             res={
@@ -160,3 +216,4 @@ def product_remove_from_cart(request):
                 'message':"Someting went wrong."
             }
             return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=406)
+
