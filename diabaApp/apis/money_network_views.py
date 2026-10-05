@@ -78,16 +78,16 @@ def money_network_list(request):
 
         else:
            serializer = [{
-            "label": "Stripe",
+            "label": "Carte bancaire",
             "value": "stripe",
-            "icon": "https://diaba-live.s3.amazonaws.com/image/network_icon/Stripe-Emblem-removebg-preview.png",
+            "icon": "https://diaba-live.s3.eu-west-3.amazonaws.com/image/network_icon/credit-card.png",
             }]
 
         if serializer == []:
            serializer = [{
-            "label": "Stripe",
+            "label": "Carte bancaire",
             "value": "stripe",
-            "icon": "https://diaba-live.s3.amazonaws.com/image/network_icon/Stripe-Emblem-removebg-preview.png",
+            "icon": "https://diaba-live.s3.eu-west-3.amazonaws.com/image/network_icon/credit-card.png",
             }]
             
                 
