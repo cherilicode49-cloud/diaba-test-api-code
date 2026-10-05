@@ -587,8 +587,40 @@ def order_create_wave_orange(request):
 
         order_id = order.id
 
+        # Determine payment gateway for Wave / Orange Money
+        detected_gateway = python_data.get('payment_gateway') or python_data.get('gateway') or network or 'Wave/Orange Money'
+
+        # Track user activity for payment method, gateway, and order creation
+        track_user_activity(
+            action_type='ORDER_PLACED',
+            customer_id=customer,
+            payment_method=payment_type,
+            payment_gateway=str(detected_gateway),
+            metadata={
+                'order_id': order.id,
+                'order_number': order_number,
+                'total_price': float(total_price) if total_price else 0,
+                'currency': str(currency_symbol),
+                'payment_gateway': str(detected_gateway),
+                'api': 'order_create_wave_orange'
+            },
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
+        track_user_activity(
+            action_type='PAYMENT_METHOD_SELECT',
+            customer_id=customer,
+            payment_method=payment_type,
+            payment_gateway=str(detected_gateway),
+            metadata={
+                'order_number': order_number,
+                'payment_gateway': str(detected_gateway),
+                'api': 'order_create_wave_orange'
+            },
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
 
         for product in products:
+
             print("product---->",product)
             shipping_via = product.get('shipping_via')
             variant = product.get('variant')
