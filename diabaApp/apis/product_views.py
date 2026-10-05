@@ -33,6 +33,8 @@ from googletrans import Translator
 from django.core.files.base import ContentFile, File
 from PIL import Image
 from io import BytesIO
+from diabaApp.utils import track_user_activity
+
 from django.contrib.postgres.search import TrigramSimilarity
 import os 
 from django.db.models import Q, F, Count, Case, Sum, When, IntegerField, Value, OuterRef, Subquery, ExpressionWrapper, CharField, FloatField
@@ -1568,6 +1570,14 @@ def product_detail_app(request):
 
                     ).save()
 
+                track_user_activity(
+                    action_type='PRODUCT_VIEW',
+                    customer_id=customer,
+                    product_id=product.id,
+                    product_name=product.product_name,
+                    country=country,
+                    ip_address=request.META.get('REMOTE_ADDR')
+                )
 
             # air_fr = f'avant le {}'
                                     
@@ -1599,7 +1609,16 @@ def product_detail_app(request):
             if product_check == 1:
                 
                 product = models.ProductDetail.objects.get(id = id)
+                track_user_activity(
+                    action_type='PRODUCT_VIEW',
+                    customer_id=None,
+                    product_id=product.id,
+                    product_name=product.product_name,
+                    country=country,
+                    ip_address=request.META.get('REMOTE_ADDR')
+                )
                 data = ProductDetailAppSerializer(product,context = {'country':country,'delivery_country':delivery_country}).data
+
 
                 # print('data---->',data)
 
@@ -1755,9 +1774,17 @@ def product_search(request):
             print("Error-=-=-=--->",e)
             country = 'Egypt'
 
-
+        if search:
+            track_user_activity(
+                action_type='SEARCH',
+                customer_id=user_id if user_id else None,
+                search_keyword=search,
+                country=country,
+                ip_address=ip_address or request.META.get('REMOTE_ADDR')
+            )
         
         serach_query = Q()
+
 
 #         # serach_query &= Q(product_name__icontains = search) | Q(product_name_french__icontains = search) | Q(category__category__icontains = search) | Q(category__category_french__icontains = search)
 #         serach_query &= Q(product_name__icontains = search, status='Active') | Q(product_name_french__icontains = search, status='Active') | Q(refpro__icontains = search, status='Active')

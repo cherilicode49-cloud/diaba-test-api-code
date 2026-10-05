@@ -33,6 +33,7 @@ from diabaApp.apis.warehouse_views import *
 from diabaApp.apis.wishlist_views import *
 from diabaApp.apis.banner_views import *
 from diabaApp.apis.container_views import *
+from diabaApp.apis.activity_views import *
 
 urlpatterns = [
 
@@ -547,8 +548,12 @@ urlpatterns = [
     path('api/product_remove_add_to_cart/',product_remove_add_to_cart, name='product_remove_add_to_cart'), #done
     path('api/need_to_change/',need_to_change, name='need_to_change'), #done
 
-
+    ## User Activity & Tracking
+    path('api/log_user_activity/', log_user_activity, name='log_user_activity'),
+    path('api/user_activity_list/', get_user_activity_list, name='user_activity_list'),
+    path('api/user_activity_analytics/', get_user_activity_analytics, name='user_activity_analytics'),
 
 ]+static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
 if not settings.DEBUG:
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)

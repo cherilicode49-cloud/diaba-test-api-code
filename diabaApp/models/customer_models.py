@@ -92,3 +92,60 @@ class RecentlyViewProduct(models.Model):
     def __str__(self):
         return "%s" % self.id
 
+
+class UserActivity(models.Model):
+    ACTION_CHOICES = [
+        ('PRODUCT_VIEW', 'Product View'),
+        ('PRODUCT_WISHLIST', 'Product Wishlist'),
+        ('ADD_TO_CART', 'Add to Cart'),
+        ('REMOVE_FROM_CART', 'Remove from Cart'),
+        ('SEARCH', 'Search Query'),
+        ('CATEGORY_VIEW', 'Category View'),
+        ('CHECKOUT_INITIATE', 'Checkout Initiate'),
+        ('PAYMENT_METHOD_SELECT', 'Payment Method Select'),
+        ('ORDER_PLACED', 'Order Placed'),
+        ('BANNER_CLICK', 'Banner Click'),
+        ('APP_OPEN', 'App Open'),
+    ]
+
+    customer = models.ForeignKey(CustomerDetail, null=True, blank=True, on_delete=models.SET_NULL, related_name='user_activities')
+    action_type = models.CharField(max_length=50, choices=ACTION_CHOICES, db_index=True)
+
+    # Product details (stored as text/id to preserve history even after product deletion)
+    product_id = models.CharField(max_length=100, null=True, blank=True, db_index=True)
+    product_name = models.CharField(max_length=255, null=True, blank=True, db_index=True)
+
+    # Payment details
+    payment_method = models.CharField(max_length=100, null=True, blank=True, db_index=True)
+
+    # Search & Category
+    search_keyword = models.CharField(max_length=255, null=True, blank=True)
+    category_name = models.CharField(max_length=255, null=True, blank=True)
+
+    # Metadata dictionary for flexible extra properties
+    metadata = models.JSONField(null=True, blank=True, default=dict)
+
+    # Device & client info (optional)
+    device_id = models.CharField(max_length=150, null=True, blank=True)
+    device_type = models.CharField(max_length=50, null=True, blank=True)
+    ip_address = models.CharField(max_length=50, null=True, blank=True)
+    country = models.CharField(max_length=100, null=True, blank=True)
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['action_type', 'created_at']),
+            models.Index(fields=['customer', 'action_type']),
+            models.Index(fields=['product_name', 'action_type']),
+            models.Index(fields=['payment_method', 'created_at']),
+        ]
+        verbose_name = 'User Activity'
+        verbose_name_plural = 'User Activities'
+
+    def __str__(self):
+        user_id = self.customer.name if (self.customer and self.customer.name) else (self.customer_id or self.device_id or 'Guest')
+        return f"{user_id} - {self.action_type} ({self.created_at})"
+
+

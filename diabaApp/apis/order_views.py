@@ -30,6 +30,7 @@ import  requests
 from diabaApp.serializer import ProductOrderDetailOrderSerializer, OrderDetailSerializer, OrderDetailDataSerializer, \
     ProductOrderDetailSerializer, ProductReviewSerializer, VendorOrderDetailSerializer, VendorOrderTrackingSerializer, \
     WarehouseDetailSerializer, VendorOrderDataSerializer, OrderTrackingSerializer, PromocodeDetailSerializer, OrderInquiryDataSerializer
+from diabaApp.utils import track_user_activity
 
 
 
@@ -155,8 +156,29 @@ def order_create(request):
 
         order_id = order.id
 
+        # Track user activity for payment method and order creation
+        track_user_activity(
+            action_type='ORDER_PLACED',
+            customer_id=customer,
+            payment_method=payment_type,
+            metadata={
+                'order_id': order.id,
+                'order_number': order_number,
+                'total_price': float(total_price) if total_price else 0,
+                'currency': str(currency_symbol)
+            },
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
+        track_user_activity(
+            action_type='PAYMENT_METHOD_SELECT',
+            customer_id=customer,
+            payment_method=payment_type,
+            metadata={'order_number': order_number},
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
 
         for product in products:
+
             print("product---->",product)
             shipping_via = product.get('shipping_via')
             variant = product.get('variant')

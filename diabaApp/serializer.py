@@ -2220,3 +2220,14 @@ class ContainerBookingFeeSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.ContainerBookingFee
         fields = '__all__'
+
+
+class UserActivitySerializer(serializers.ModelSerializer):
+    customer_name = serializers.ReadOnlyField(source='customer.name')
+    customer_email = serializers.ReadOnlyField(source='customer.email')
+    customer_mobile = serializers.ReadOnlyField(source='customer.mobileNumber')
+
+    class Meta:
+        model = models.UserActivity
+        fields = '__all__'
+
