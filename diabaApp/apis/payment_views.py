@@ -2197,6 +2197,7 @@ def container_status_view(request):
 def initiate_bictorys_payment_for_inquiry(request):
  
     try:
+        is_web_view = True
  
         # -----------------------------------------
         # Validate request method
@@ -2592,6 +2593,9 @@ def initiate_bictorys_payment_for_inquiry(request):
  
                 "currency":
                     "XOF",
+
+                "is_web_view":is_web_view,
+
  
                 "status":
                     "PENDING"
