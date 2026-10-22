@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Payment Successful</title>
+  <title>Payment Status</title>
 
   <style>
     body {
@@ -15,7 +15,7 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      height: 100vh;
+      min-height: 100vh;
     }
 
     .card {
@@ -41,12 +41,11 @@
     }
 
     .logo {
-      /* width: 80px; */
       height: 80px;
       margin-bottom: 12px;
     }
 
-    .success-icon {
+    .status-icon {
       font-size: 60px;
       margin: 12px 0;
     }
@@ -86,6 +85,11 @@
     }
 
     .lang-btn.active {
+      background: #0d6efd;
+      color: #ffffff;
+      border-color: #0d6efd;
+    }
+
     .btn-return {
       display: inline-block;
       margin-top: 16px;
@@ -97,51 +101,132 @@
       font-weight: 600;
       font-size: 15px;
       box-shadow: 0 4px 12px rgba(13, 110, 253, 0.3);
-      transition: background 0.2s;
+      transition: background 0.2s, opacity 0.2s;
+      cursor: pointer;
+      border: none;
     }
 
     .btn-return:hover {
       background: #0b5ed7;
     }
+
+    .btn-return:disabled,
+    .btn-return.disabled {
+      opacity: 0.6;
+      pointer-events: none;
+      cursor: not-allowed;
+    }
+
+    .info-box {
+      background: #f1f5f9;
+      border-left: 4px solid #0d6efd;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #475569;
+      margin: 16px 0;
+      text-align: left;
+    }
   </style>
 
   <script>
-    function getDeepLink() {
+    const IS_ALREADY_COMPLETED = {{ already_completed|yesno:"true,false" }};
+    const CURRENT_REF = '{{ reference }}' || '';
+
+    function getParamReference() {
       const urlParams = new URLSearchParams(window.location.search);
-      const ref = urlParams.get('reference') || '{{ reference }}' || '';
-      return 'diaba://payment-success' + (ref ? '?reference=' + encodeURIComponent(ref) : '');
+      return urlParams.get('reference') || CURRENT_REF;
+    }
+
+    function isReferenceUsed(ref) {
+      if (!ref) return false;
+      try {
+        return sessionStorage.getItem('diaba_ref_used_' + ref) === 'true';
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function markReferenceUsed(ref) {
+      if (!ref) return;
+      try {
+        sessionStorage.setItem('diaba_ref_used_' + ref, 'true');
+      } catch (e) {}
+    }
+
+    function cleanUrl() {
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
     }
 
     function switchLang(lang) {
-      document.getElementById("en").style.display =
-        lang === "en" ? "block" : "none";
-      document.getElementById("fr").style.display =
-        lang === "fr" ? "block" : "none";
+      document.querySelectorAll(".lang-content").forEach(function(el) {
+        el.style.display = "none";
+      });
+      document.querySelectorAll(".lang-" + lang).forEach(function(el) {
+        el.style.display = "block";
+      });
 
-      document.getElementById("btn-en").classList.toggle(
-        "active",
-        lang === "en"
-      );
-      document.getElementById("btn-fr").classList.toggle(
-        "active",
-        lang === "fr"
-      );
+      document.getElementById("btn-en").classList.toggle("active", lang === "en");
+      document.getElementById("btn-fr").classList.toggle("active", lang === "fr");
     }
 
-    window.onload = function() {
-      const deepLink = getDeepLink();
-      
-      // Update link buttons
+    function openAppManually(e) {
+      if (e) e.preventDefault();
+      const ref = getParamReference();
+
+      // Disable buttons to prevent repeated clicks
       const btnEn = document.getElementById("link-en");
       const btnFr = document.getElementById("link-fr");
-      if (btnEn) btnEn.href = deepLink;
-      if (btnFr) btnFr.href = deepLink;
+      if (btnEn) { btnEn.disabled = true; btnEn.innerText = "Opening Diaba App..."; }
+      if (btnFr) { btnFr.disabled = true; btnFr.innerText = "Ouverture de Diaba..."; }
 
-      // Auto-redirect to Diaba mobile app
+      markReferenceUsed(ref);
+      cleanUrl();
+
+      const deepLink = 'diaba://payment-success' + (ref ? '?reference=' + encodeURIComponent(ref) : '');
+      window.location.href = deepLink;
+    }
+
+    function showAlreadyUsedUI() {
+      const activeSection = document.getElementById("active-section");
+      const usedSection = document.getElementById("used-section");
+      if (activeSection) activeSection.style.display = "none";
+      if (usedSection) usedSection.style.display = "block";
+    }
+
+    function initPage() {
+      const ref = getParamReference();
+
+      // If backend says it's already completed OR session already used this ref in browser:
+      if (IS_ALREADY_COMPLETED || isReferenceUsed(ref)) {
+        showAlreadyUsedUI();
+        cleanUrl();
+        return;
+      }
+
+      // First-time visit: auto-redirect once after 400ms
       setTimeout(function() {
-        window.location.href = deepLink;
-      }, 300);
-    };
+        if (!isReferenceUsed(ref) && !IS_ALREADY_COMPLETED) {
+          markReferenceUsed(ref);
+          cleanUrl();
+          const deepLink = 'diaba://payment-success' + (ref ? '?reference=' + encodeURIComponent(ref) : '');
+          window.location.href = deepLink;
+        }
+      }, 400);
+    }
+
+    window.onload = initPage;
+
+    // Handle bfcache (back-forward cache) when user returns to this tab
+    window.addEventListener("pageshow", function(event) {
+      const ref = getParamReference();
+      if (event.persisted || isReferenceUsed(ref) || IS_ALREADY_COMPLETED) {
+        showAlreadyUsedUI();
+        cleanUrl();
+      }
+    });
   </script>
 </head>
 
@@ -164,33 +249,71 @@
       class="logo"
     />
 
-    <div class="success-icon">✅</div>
+    <!-- ACTIVE FIRST-TIME PAYMENT VIEW -->
+    <div id="active-section">
+      <div class="status-icon">✅</div>
 
-    <!-- English -->
-    <div id="en">
-      <h1>Payment Successful</h1>
-      <p>
-        Your payment has been completed successfully.<br />
-        Redirecting you to the <strong>Diaba App</strong>...
-      </p>
-      <a id="link-en" href="diaba://payment-success" class="btn-return">Open Diaba App</a>
+      <!-- English -->
+      <div id="en-active" class="lang-content lang-en">
+        <h1>Payment Successful</h1>
+        <p>
+          Your payment has been completed successfully.<br />
+          Redirecting you to the <strong>Diaba App</strong>...
+        </p>
+        <button id="link-en" onclick="openAppManually(event)" class="btn-return">
+          Open Diaba App
+        </button>
+        <div class="note" style="margin-top: 16px;">
+          Click above if not redirected automatically.
+        </div>
+      </div>
 
-      <div class="note" style="margin-top: 16px;">
-        Click above if not redirected automatically.
+      <!-- French -->
+      <div id="fr-active" class="lang-content lang-fr" style="display: none;">
+        <h1>Paiement réussi</h1>
+        <p>
+          Votre paiement a été effectué avec succès.<br />
+          Redirection vers l’application <strong>Diaba</strong>...
+        </p>
+        <button id="link-fr" onclick="openAppManually(event)" class="btn-return">
+          Ouvrir Diaba
+        </button>
+        <div class="note" style="margin-top: 16px;">
+          Cliquez ci-dessus si la redirection ne s'effectue pas automatiquement.
+        </div>
       </div>
     </div>
 
-    <!-- French -->
-    <div id="fr" style="display: none">
-      <h1>Paiement réussi</h1>
-      <p>
-        Votre paiement a été effectué avec succès.<br />
-        Redirection vers l’application <strong>Diaba</strong>...
-      </p>
-      <a id="link-fr" href="diaba://payment-success" class="btn-return">Ouvrir Diaba</a>
+    <!-- ALREADY USED / EXPIRED VIEW -->
+    <div id="used-section" style="display: none;">
+      <div class="status-icon">ℹ️</div>
 
-      <div class="note" style="margin-top: 16px;">
-        Cliquez ci-dessus si la redirection ne s'effectue pas automatiquement.
+      <!-- English -->
+      <div id="en-used" class="lang-content lang-en">
+        <h1>Payment Already Processed</h1>
+        <p>
+          This payment confirmation has already been applied to your order.
+        </p>
+        <div class="info-box">
+          To place a new order or view your orders, please launch the <strong>Diaba App</strong> directly from your home screen.
+        </div>
+        <a href="diaba://" class="btn-return">
+          Launch Diaba App
+        </a>
+      </div>
+
+      <!-- French -->
+      <div id="fr-used" class="lang-content lang-fr" style="display: none;">
+        <h1>Paiement déjà traité</h1>
+        <p>
+          Cette confirmation de paiement a déjà été associée à votre commande.
+        </p>
+        <div class="info-box">
+          Pour passer une nouvelle commande ou consulter vos achats, veuillez ouvrir l’application <strong>Diaba</strong> depuis votre écran d’accueil.
+        </div>
+        <a href="diaba://" class="btn-return">
+          Ouvrir Diaba
+        </a>
       </div>
     </div>
   </div>

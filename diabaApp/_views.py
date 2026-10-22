@@ -16787,7 +16787,17 @@ def cargo_list_app(request):
 
 
 def success_url(request):
-    return render(request, "success_url.html")
+    reference = request.GET.get("reference", "").strip()
+    already_completed = False
+    if reference:
+        order_exists = models.OrderDetail.objects.filter(payment_id=reference).exists()
+        txn_used = models.OrderTransaction.objects.filter(
+            reference_id=reference,
+            order__isnull=False
+        ).exists()
+        if order_exists or txn_used:
+            already_completed = True
+    return render(request, "success_url.html", {"reference": reference, "already_completed": already_completed})
 
 def error_url(request):
     return render(request, "error_url.html")

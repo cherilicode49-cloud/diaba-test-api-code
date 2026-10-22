@@ -485,8 +485,26 @@ def order_create_wave_orange(request):
         cargo = python_data.get("cargo")
         reference_id = python_data.get("reference_id")
         is_order_track = python_data.get("is_order_track", True)
-        
 
+        # -------------------------------------------------------------
+        # Security Check: Prevent Payment Reference Reuse / Duplication
+        # -------------------------------------------------------------
+        if reference_id:
+            reference_id = str(reference_id).strip()
+            already_used_order = models.OrderDetail.objects.filter(payment_id=reference_id).first()
+            already_used_txn = models.OrderTransaction.objects.filter(
+                reference_id=reference_id,
+                order__isnull=False
+            ).first()
+
+            if already_used_order or already_used_txn:
+                print(f"FRAUD/REUSE BLOCKED: reference_id '{reference_id}' is already linked to an order.")
+                res = {
+                    "success": False,
+                    "error": "This payment reference has already been used for an order.",
+                    "message": "This payment reference has already been used for an order."
+                }
+                return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
         
         print(python_data, 'python_datapython_data')
 
@@ -677,20 +695,44 @@ def order_create_wave_orange(request):
         currency = python_data.get("currency")
         
 
-        create_transaction = models.OrderTransaction.objects.create(
-            order_id  = order_id,
-            customer_id = customer,
-            currency= currency_name,
-            payment_type = payment_type,
-            payment_id = payment_id,
-            reference_id = reference_id,
-            fee_amount = fee_amount,
-            net_amount = net_amount,
-            total_amount = original_total_amount,
-            tax_price = tax_price,
-            status = 'completed',
-            created_at = date_time,
-        ).save()
+        # -------------------------------------------------------------
+        # Link or create OrderTransaction
+        # -------------------------------------------------------------
+        existing_txn = None
+        if reference_id:
+            existing_txn = models.OrderTransaction.objects.filter(
+                reference_id=reference_id,
+                order__isnull=True
+            ).order_by('-id').first()
+
+        if existing_txn:
+            existing_txn.order_id = order_id
+            existing_txn.customer_id = customer
+            existing_txn.currency = currency_name
+            existing_txn.payment_type = payment_type
+            existing_txn.payment_id = payment_id
+            existing_txn.total_amount = original_total_amount
+            existing_txn.tax_price = tax_price
+            existing_txn.status = 'completed'
+            existing_txn.cash_status = 'paid'
+            existing_txn.save()
+        else:
+            models.OrderTransaction.objects.create(
+                order_id = order_id,
+                customer_id = customer,
+                currency = currency_name,
+                payment_type = payment_type,
+                payment_id = payment_id,
+                reference_id = reference_id,
+                fee_amount = fee_amount,
+                net_amount = net_amount,
+                total_amount = original_total_amount,
+                tax_price = tax_price,
+                status = 'completed',
+                cash_status = 'paid',
+                created_at = date_time,
+            )
+
         order.payment_id = payment_id
         order.save()
 

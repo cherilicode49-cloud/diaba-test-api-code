@@ -409,8 +409,28 @@ def pay_pix_test(request):
 
 
 def success_url(request):
-    reference = request.GET.get("reference", "")
-    return render(request, "success_url.html", {"reference": reference})
+    reference = request.GET.get("reference", "").strip()
+    already_completed = False
+
+    if reference:
+        # Check if an order has already been created/completed with this payment reference
+        order_exists = models.OrderDetail.objects.filter(payment_id=reference).exists()
+        txn_used = models.OrderTransaction.objects.filter(
+            reference_id=reference,
+            order__isnull=False
+        ).exists()
+
+        if order_exists or txn_used:
+            already_completed = True
+
+    return render(
+        request,
+        "success_url.html",
+        {
+            "reference": reference,
+            "already_completed": already_completed
+        }
+    )
 
 def error_url(request):
     reference = request.GET.get("reference", "")
@@ -995,6 +1015,12 @@ def bictorys_payment_status(request):
 
                     "currency":
                         transaction.currency,
+
+                    "is_already_used":
+                        bool(transaction.order_id),
+
+                    "order_id":
+                        transaction.order_id,
 
                     "message":
                         "Payment already confirmed"
