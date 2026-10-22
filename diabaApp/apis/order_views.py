@@ -59,6 +59,24 @@ def order_create(request):
         cargo = python_data.get("cargo")
         is_order_track = python_data.get("is_order_track", True)
 
+        # -------------------------------------------------------------
+        # Security Check: Prevent Payment Reference Reuse / Duplication
+        # -------------------------------------------------------------
+        if payment_id:
+            payment_id = str(payment_id).strip()
+            already_used_order = models.OrderDetail.objects.filter(payment_id=payment_id).first()
+            already_used_txn = models.OrderTransaction.objects.filter(
+                reference_id=payment_id,
+                order__isnull=False
+            ).first()
+            if already_used_order or already_used_txn:
+                print(f"FRAUD/REUSE BLOCKED in order_create: payment_id '{payment_id}' is already linked to an order.")
+                res = {
+                    "success": False,
+                    "error": "This payment reference has already been used for an order.",
+                    "message": "This payment reference has already been used for an order."
+                }
+                return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
         
         print(python_data, 'python_datapython_data')
 

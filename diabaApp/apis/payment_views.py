@@ -988,6 +988,24 @@ def bictorys_payment_status(request):
         # don't downgrade it.
         # =================================================
 
+        # -------------------------------------------------
+        # Security Check: Prevent Reusing an Already Processed Payment
+        # -------------------------------------------------
+        already_used_order = models.OrderDetail.objects.filter(payment_id=payment_reference).first()
+        if transaction.order_id or already_used_order:
+            linked_order_id = transaction.order_id or (already_used_order.order_id if already_used_order else "")
+            print(f"FRAUD/REUSE BLOCKED in payment_status: {payment_reference} already used for order {linked_order_id}")
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": False,
+                    "error": "This payment reference has already been used for another order.",
+                    "already_used": True,
+                    "order_id": linked_order_id
+                }),
+                content_type="application/json",
+                status=400
+            )
+
         if transaction.status == "SUCCEEDED":
 
             return HttpResponse(
