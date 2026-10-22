@@ -141,7 +141,7 @@
     function isReferenceUsed(ref) {
       if (!ref) return false;
       try {
-        return sessionStorage.getItem('diaba_ref_used_' + ref) === 'true';
+        return localStorage.getItem('diaba_ref_used_' + ref) === 'true';
       } catch (e) {
         return false;
       }
@@ -150,7 +150,7 @@
     function markReferenceUsed(ref) {
       if (!ref) return;
       try {
-        sessionStorage.setItem('diaba_ref_used_' + ref, 'true');
+        localStorage.setItem('diaba_ref_used_' + ref, 'true');
       } catch (e) {}
     }
 
@@ -199,7 +199,7 @@
     function initPage() {
       const ref = getParamReference();
 
-      // If backend says it's already completed OR session already used this ref in browser:
+      // If backend says it's already completed OR localStorage already recorded this ref as used:
       if (IS_ALREADY_COMPLETED || isReferenceUsed(ref)) {
         showAlreadyUsedUI();
         cleanUrl();
@@ -290,12 +290,12 @@
 
       <!-- English -->
       <div id="en-used" class="lang-content lang-en">
-        <h1>Payment Already Processed</h1>
+        <h1>Transaction Already Completed</h1>
         <p>
-          This payment confirmation has already been applied to your order.
+          This transaction has already been completed and confirmed. This link has expired and cannot be used again.
         </p>
         <div class="info-box">
-          To place a new order or view your orders, please launch the <strong>Diaba App</strong> directly from your home screen.
+          To place a new order or view your orders, please launch the <strong>Diaba App</strong> directly from your device.
         </div>
         <a href="diaba://" class="btn-return">
           Launch Diaba App
@@ -304,12 +304,12 @@
 
       <!-- French -->
       <div id="fr-used" class="lang-content lang-fr" style="display: none;">
-        <h1>Paiement déjà traité</h1>
+        <h1>Transaction déjà effectuée</h1>
         <p>
-          Cette confirmation de paiement a déjà été associée à votre commande.
+          Cette transaction a déjà été confirmée. Ce lien a expiré et ne peut plus être réutilisé.
         </p>
         <div class="info-box">
-          Pour passer une nouvelle commande ou consulter vos achats, veuillez ouvrir l’application <strong>Diaba</strong> depuis votre écran d’accueil.
+          Pour passer une nouvelle commande ou consulter vos achats, veuillez ouvrir l’application <strong>Diaba</strong> depuis votre appareil.
         </div>
         <a href="diaba://" class="btn-return">
           Ouvrir Diaba

@@ -411,24 +411,32 @@ def pay_pix_test(request):
 def success_url(request):
     reference = request.GET.get("reference", "").strip()
     already_completed = False
+    order_id = ""
 
     if reference:
         # Check if an order has already been created/completed with this payment reference
-        order_exists = models.OrderDetail.objects.filter(payment_id=reference).exists()
+        order = models.OrderDetail.objects.filter(payment_id=reference).first()
+        txn = models.OrderTransaction.objects.filter(reference_id=reference).order_by("-id").first()
         txn_used = models.OrderTransaction.objects.filter(
             reference_id=reference,
             order__isnull=False
-        ).exists()
+        ).first()
 
-        if order_exists or txn_used:
+        if order or txn_used:
             already_completed = True
+            order_id = order.order_id if order else (txn_used.order.order_id if txn_used and txn_used.order else "")
+        elif txn:
+            if txn.order_id or txn.cash_status in ["used", "paid"]:
+                already_completed = True
+                order_id = str(txn.order_id or "")
 
     return render(
         request,
         "success_url.html",
         {
             "reference": reference,
-            "already_completed": already_completed
+            "already_completed": already_completed,
+            "order_id": order_id
         }
     )
 
@@ -634,17 +642,17 @@ def initiate_bictorys_payment(request):
                 payment_reference,
 
             # Dynamic Deep Link / Redirect URLs
-            # Defaults to HTTPS Web Bridge: https://diaba.store/payment-success/
+            # Defaults to HTTPS Web Bridge: https://api.diaba.store/payment-success/
             "successRedirectUrl":
                 python_data.get("success_url")
                 or python_data.get("successRedirectUrl")
-                or f"https://diaba.store/payment-success/?reference={payment_reference}",
+                or f"https://api.diaba.store/payment-success/?reference={payment_reference}",
 
             # Dynamic Failure Redirect URL
             "errorRedirectUrl":
                 python_data.get("error_url")
                 or python_data.get("errorRedirectUrl")
-                or f"https://diaba.store/payment-failed/?reference={payment_reference}"
+                or f"https://api.diaba.store/payment-failed/?reference={payment_reference}"
         }
  
         print(
@@ -2351,17 +2359,17 @@ def initiate_bictorys_payment_for_inquiry(request):
                 payment_reference,
 
             # Dynamic Deep Link / Redirect URLs
-            # Defaults to HTTPS Web Bridge: https://diaba.store/inquiry-success/
+            # Defaults to HTTPS Web Bridge: https://api.diaba.store/inquiry-success/
             "successRedirectUrl":
                 python_data.get("success_url")
                 or python_data.get("successRedirectUrl")
-                or f"https://diaba.store/inquiry-success/?reference={payment_reference}",
+                or f"https://api.diaba.store/inquiry-success/?reference={payment_reference}",
 
             # Dynamic Failure Redirect URL
             "errorRedirectUrl":
                 python_data.get("error_url")
                 or python_data.get("errorRedirectUrl")
-                or f"https://diaba.store/inquiry-failed/?reference={payment_reference}"
+                or f"https://api.diaba.store/inquiry-failed/?reference={payment_reference}"
         }
  
         print(
