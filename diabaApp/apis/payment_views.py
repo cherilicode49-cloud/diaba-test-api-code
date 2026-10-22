@@ -447,13 +447,13 @@ def send_otp_whatsapp(request):
 
 @csrf_exempt
 def initiate_bictorys_payment(request):
- 
+    
     try:
  
         # -----------------------------------------
         # Validate request method
         # -----------------------------------------
- 
+        is_web_view = True
         if request.method != "POST":
  
             return HttpResponse(
@@ -826,30 +826,15 @@ def initiate_bictorys_payment(request):
             JSONRenderer().render({
  
                 "success": True,
- 
-                "message":
-                    "Payment initiated successfully",
- 
-                "transaction_id":
-                    transaction.id,
- 
-                "payment_reference":
-                    payment_reference,
- 
-                "bictorys_transaction_id":
-                    charge_id,
- 
-                "payment_url":
-                    payment_url,
- 
-                "amount":
-                    amount,
- 
-                "currency":
-                    "XOF",
- 
-                "status":
-                    "PENDING"
+                "message":"Payment initiated successfully",
+                "transaction_id":transaction.id,
+                "payment_reference":payment_reference,
+                "bictorys_transaction_id":charge_id,
+                "payment_url":payment_url,
+                "amount":amount,
+                "currency":"XOF",
+                "is_web_view":is_web_view,
+                "status":"PENDING"
             }),
             content_type="application/json",
             status=200
