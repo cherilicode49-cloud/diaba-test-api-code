@@ -329,10 +329,23 @@ class ProductDetailAppSerializer(serializers.ModelSerializer):
 
             if country.currency_code == currency_country.currency_code:
                 # print(price_by_air, price_by_ship,"HERE--------1")
+                rate_air_val = float(price_by_air or 0)
+                rate_ship_val = float(price_by_ship or 0)
+                rate_express_val = float(price_by_express or 0)
+                if country.currency_code in ['XOF', 'XAF']:
+                    conv = models.CurrencyConverter.objects.filter(currency_code=country.currency_code).first()
+                    sys_rate = float(conv.system_rate) if conv else 565.0
+                    if 0 < rate_air_val < 500:
+                        rate_air_val = rate_air_val * sys_rate
+                    if 0 < rate_ship_val < 500:
+                        rate_ship_val = rate_ship_val * sys_rate
+                    if 0 < rate_express_val < 500:
+                        rate_express_val = rate_express_val * sys_rate
+
                 return {
-                    'price_by_air' : round(float(price_by_air), 2),
-                    'price_by_ship' : round(float(price_by_ship), 2),
-                    'price_by_express' : round(float(price_by_express), 2)
+                    'price_by_air' : round(rate_air_val, 2),
+                    'price_by_ship' : round(rate_ship_val, 2),
+                    'price_by_express' : round(rate_express_val, 2)
                 }
             else:
 
@@ -344,9 +357,14 @@ class ProductDetailAppSerializer(serializers.ModelSerializer):
                     if country.price_by_air not in [None,'','null']:
                         usd_price_by_air = float(country.price_by_air) / float(deliver_currency_value.system_rate)
                         usd_price_by_ship = float(country.price_by_ship) / float(deliver_currency_value.system_rate)
+                        if country.express_shipping not in [None,'','null']:
+                            usd_price_by_express = float(country.express_shipping) / float(deliver_currency_value.system_rate)
+                        else:
+                            usd_price_by_express = 0
                         actual_currency_value = models.CurrencyConverter.objects.get(currency_code = currency_country.currency_code)
                         price_by_air = float(usd_price_by_air) * float(actual_currency_value.system_rate)
                         price_by_ship = float(usd_price_by_ship) * float(actual_currency_value.system_rate)
+                        price_by_express = float(usd_price_by_express) * float(actual_currency_value.system_rate)
                     else:
                         print("HERE--------3")
                         
