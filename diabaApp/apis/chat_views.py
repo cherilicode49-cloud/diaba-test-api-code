@@ -15,6 +15,7 @@ from django.db.models import Max, Min
 from django.db.models.functions import Replace, Lower, Greatest
 from django.db.models import Value
 from django.utils import timezone
+from django.core.cache import cache
 
 import numpy as np
 from django.contrib.postgres.search import TrigramSimilarity
@@ -485,7 +486,19 @@ def user_new_message_count(request):
         python_data = JSONParser().parse(io.BytesIO(request.body))
         
         customer = python_data.get('customer')
-        message_count = models.ChatConversion.objects.filter(user=customer, status = "Unseen").exclude(send_by = "User").count()
+        if not customer or customer in ['null', 'None']:
+            res = {
+                'message_count': 0,
+                'cart_count': 0
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+        cache_key = f"user_msg_cart_count_{customer}"
+        cached_res = cache.get(cache_key)
+        if cached_res is not None:
+            return HttpResponse(JSONRenderer().render(cached_res), content_type='application/json', status=200)
+
+        message_count = models.ChatConversion.objects.filter(user=customer, status="Unseen").exclude(send_by="User").count()
         
         cart_count = sum(
             int(qty) if qty not in [None, '', 'null'] else 0
@@ -494,12 +507,13 @@ def user_new_message_count(request):
                 product__status='Active'
             ).values_list('quantity', flat=True)
         )
-        print(cart_count, 'cart_countcart_count', flush=True)
-        res={
-            'message_count':message_count,
-            'cart_count':cart_count
+
+        res = {
+            'message_count': message_count,
+            'cart_count': cart_count
         }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)       
+        cache.set(cache_key, res, 3)
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)       
 
 
 @csrf_exempt

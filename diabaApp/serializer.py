@@ -6,6 +6,7 @@ from django.conf import settings
 from django.db.models import Q
 from datetime import datetime
 import random, math
+from django.core.cache import cache
 
 
 
@@ -817,79 +818,85 @@ class ProductDataSerializer(serializers.ModelSerializer):
          'product_name', 'product_code', 'product_image_1', 'country_of_origin_name', 'country_of_origin_image','currency']
 
     def get_currency(self, obj):
-        country = self.context.get('country','Egypt')
-        if models.CountryWithCurrency.objects.filter(country_name = country).exists():
-            try:
-                return models.CountryWithCurrency.objects.filter(country_name = country).first().currency_symbol
-            except:
-                return "$"
-        else:
-            return "$"
-
-
-
-    def get_price(self, obj):
-        country = self.context.get('country','Egypt')
-        if not models.CountryWithCurrency.objects.filter(country_name = country).exists():
+        country = self.context.get('country', 'Egypt')
+        if not country or country in ['null', 'None']:
             country = 'Egypt'
 
+        cache_key = f"curr_sym_{country}"
+        symbol = cache.get(cache_key)
+        if symbol is not None:
+            return symbol
+
         try:
-            # print("Variant country=-=-==-->",country)
-            get_country = models.CountryWithCurrency.objects.get(country_name = country)
-            # print("Country-=----1--->",get_country.currency_code)
-            if get_country.currency_code == "USD":
-                # print("currency-=----1")
-                currency = get_country
+            country_obj = models.CountryWithCurrency.objects.filter(country_name=country).first()
+            symbol = country_obj.currency_symbol if country_obj and country_obj.currency_symbol else "$"
+        except Exception:
+            symbol = "$"
 
-                to_convert_us_currency = models.CurrencyConverter.objects.get(currency_code = "XOF")
-                calculate_us_price = float(obj.price) / float(to_convert_us_currency.system_rate)
+        cache.set(cache_key, symbol, 3600)
+        return symbol
 
-                # print("currency-=-=-==-==-=--3---->",currency)
-                # print("currency.currency_code-=-=-==-==-=--3---->",currency.currency_code)
-                # print("calculate_us_price-=-=-==-==-=--3---->",calculate_us_price)
+    def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        if not country or country in ['null', 'None']:
+            country = 'Egypt'
 
-            else:
-                # print("currency-=----2")
-                currency = models.CurrencyConverter.objects.get(currency_code = get_country.currency_code)
-                # print("cprint("Country-=----2--->",currency)
-                to_convert_us_currency = models.CurrencyConverter.objects.get(currency_code = "XOF")
-                calculate_us_price = float(obj.price) / float(to_convert_us_currency.system_rate)
+        cache_key = f"country_rate_info_{country}"
+        rate_info = cache.get(cache_key)
 
+        if not rate_info:
+            try:
+                get_country = models.CountryWithCurrency.objects.filter(country_name=country).first()
+                if not get_country:
+                    get_country = models.CountryWithCurrency.objects.filter(country_name='Egypt').first()
+
+                curr_code = get_country.currency_code if get_country else "USD"
+                to_convert_us_currency = models.CurrencyConverter.objects.filter(currency_code="XOF").first()
+                xof_rate = float(to_convert_us_currency.system_rate) if to_convert_us_currency else 1.0
+
+                target_rate = 1.0
+                if curr_code != "USD":
+                    target_curr = models.CurrencyConverter.objects.filter(currency_code=curr_code).first()
+                    if target_curr:
+                        target_rate = float(target_curr.system_rate)
+
+                rate_info = {
+                    'curr_code': curr_code,
+                    'is_country_usd': (get_country.currency_code == "USD") if get_country else True,
+                    'xof_rate': xof_rate,
+                    'target_rate': target_rate
+                }
+                cache.set(cache_key, rate_info, 3600)
+            except Exception:
+                rate_info = {
+                    'curr_code': 'USD',
+                    'is_country_usd': True,
+                    'xof_rate': 1.0,
+                    'target_rate': 1.0
+                }
+
+        try:
+            raw_price = float(obj.price)
+            calculate_us_price = raw_price / rate_info['xof_rate']
             if calculate_us_price < 1:
                 calculate_us_price = 1
 
-            # print(calculate_us_price, 'calculate_us_price')
-
-            if currency.currency_code == "XOF" and not get_country.currency_code == "USD":
+            curr_code = rate_info['curr_code']
+            if curr_code == "XOF" and not rate_info['is_country_usd']:
+                value = math.ceil(raw_price)
+                return f"{value:,}".replace(",", " ")
+            elif curr_code == "USD":
+                value = math.ceil(calculate_us_price)
+                return f"{value:,}".replace(",", " ")
+            else:
+                value = math.ceil(calculate_us_price * rate_info['target_rate'])
+                return f"{value:,}".replace(",", " ")
+        except Exception:
+            try:
                 value = math.ceil(float(obj.price))
                 return f"{value:,}".replace(",", " ")
-            
-            # elif currency.currency_code == "XAF":
-                # value = math.ceil(float(calculate_us_price) * float(currency.system_rate))   
-                # return f"{value:,}".replace(",", " ")
-                # # # print("currency.system_rate=====>",currency.system_rate)    
-                # value = math.ceil(float(calculate_us_price) * float(currency.system_rate))         
-                # return f"{value:,}".replace(",", " ")
-
-            elif currency.currency_code == "USD":  
-                # # print("currency.system_rate=====>",currency.system_rate)    
-                # value = math.ceil(float(calculate_us_price) * float(currency.system_rate))         
-                # return f"{value:,}".replace(",", " ")
-                value = math.ceil(float(calculate_us_price))
-                # print("value===USDDDD==>",value)    
-                return f"{value:,}".replace(",", " ")
-
-            else:
-                # # print("currency.system_rate=====>",currency.system_rate)    
-                value = math.ceil(float(calculate_us_price) * float(currency.system_rate))         
-                return f"{value:,}".replace(",", " ")
-            
-
-        
-        except Exception as e:
-            print("error----->",e)
-            value = math.ceil(float(obj.price))
-            return f"{value:,}".replace(",", " ")
+            except Exception:
+                return "0"
 
 
 

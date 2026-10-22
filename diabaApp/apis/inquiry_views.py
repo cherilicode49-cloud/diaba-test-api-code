@@ -27,73 +27,87 @@ IMAGE_URL = settings.IMAGE_URL
 
 @csrf_exempt
 def product_inquiry_form(request):
-    if request.method == "POST":        
-        product_data = json.loads(request.POST.get("product_data", "[]"))
-        customer_id = request.POST.get("customer_id")
+    if request.method == "POST":
+        try:
+            product_data_raw = request.POST.get("product_data", "[]")
+            if isinstance(product_data_raw, str):
+                product_data = json.loads(product_data_raw)
+            elif isinstance(product_data_raw, list):
+                product_data = product_data_raw
+            else:
+                product_data = []
 
-        # amount: 121798
-        # bictorys_transaction_id: "1b846d91-9dad-4dc4-9551-a24594805ca8"
-        
-        # payment_reference: "BICT-4461419D7E36"
+            customer_id = request.POST.get("customer_id")
 
-        payment_transaction = models.ProductRequestTransaction.objects.create(
-            customer_id=customer_id,
-            payment_type="Bictorys",
-            payment_id=request.POST.get("bictorys_transaction_id"),
-            reference_id=request.POST.get("payment_reference"),
-            total_amount=request.POST.get("amount"),
-            currency="XOF",
-            status="Success",
-        )
-        payment_transaction.save()
-
-        print(request.POST, 'product_data', flush=True)
-        inquiry_code = f"INQ-{uuid.uuid4().hex[:8].upper()}"
-
-        with transaction.atomic():
-            for index, product in enumerate(product_data):
-                product_name=product.get("product_name")
-                description=product.get("description")
-                quantity=product.get("quantity")
-
-                try: 
-                    quantity = int(quantity)
-                except (ValueError, TypeError):
-                    res={
-                        'message':'Quantity should be an integer.'
-                    }
-                    return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 406)
-                
-                product_inquiry = models.ProductInquiry.objects.create(
-                    transaction_id = payment_transaction.id,
+            with transaction.atomic():
+                payment_transaction = models.ProductRequestTransaction.objects.create(
                     customer_id=customer_id,
-                    inquiry_code = inquiry_code,
-                    product_name=product_name,
-                    description=description,
-                    quantity=quantity,
-                    created_at = datetime.now()
+                    payment_type="Bictorys",
+                    payment_id=request.POST.get("bictorys_transaction_id"),
+                    reference_id=request.POST.get("payment_reference"),
+                    total_amount=request.POST.get("amount"),
+                    currency="XOF",
+                    status="Success",
                 )
 
-                images = request.FILES.getlist(f"images_{index}")
+                print(request.POST, 'product_data', flush=True)
+                inquiry_code = f"INQ-{uuid.uuid4().hex[:8].upper()}"
 
-                models.ProductInquiryImages.objects.bulk_create([
-                    models.ProductInquiryImages(
-                        inquiry_id=product_inquiry.id,
-                        image=image
+                for index, product in enumerate(product_data):
+                    product_name = product.get("product_name")
+                    description = product.get("description")
+                    quantity = product.get("quantity")
+
+                    try: 
+                        quantity = int(quantity)
+                    except (ValueError, TypeError):
+                        res = {
+                            'message': 'Quantity should be an integer.'
+                        }
+                        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=406)
+                    
+                    product_inquiry = models.ProductInquiry.objects.create(
+                        transaction_id=payment_transaction.id,
+                        customer_id=customer_id,
+                        inquiry_code=inquiry_code,
+                        product_name=product_name,
+                        description=description,
+                        quantity=quantity,
+                        created_at=datetime.now()
                     )
-                    for image in images
-                ])
 
-        res={
-            'message':'Inquiry Submitted Successfully'
-        }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 200)
+                    # Look for images under various possible field keys: images_0, images_0[], images, images[]
+                    images = (
+                        request.FILES.getlist(f"images_{index}") or 
+                        request.FILES.getlist(f"images_{index}[]") or 
+                        (request.FILES.getlist("images") if len(product_data) == 1 else []) or
+                        (request.FILES.getlist("images[]") if len(product_data) == 1 else [])
+                    )
+
+                    for image in images:
+                        models.ProductInquiryImages.objects.create(
+                            inquiry=product_inquiry,
+                            image=image
+                        )
+
+            res = {
+                'message': 'Inquiry Submitted Successfully'
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            res = {
+                'message': f'Failed to submit inquiry: {str(e)}'
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=500)
     else:
         print(request.method, "request.method")
-        res={
-            'message':'something went wrong'
+        res = {
+            'message': 'something went wrong'
         }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 500)
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=500)
 
 
 

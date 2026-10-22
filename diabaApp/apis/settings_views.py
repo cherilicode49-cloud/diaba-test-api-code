@@ -18,6 +18,7 @@ from diabaApp.serializer import AppDynamicSettingSerializer, ProductDataSerializ
     AboutUsSerializer, PrivacyPolicySerializer, RefundPolicySerializer, TermsAndConditionSerializer, ImportantNoteSerializer, \
     IntroBannerSerializer
 from django.db.models.functions import Random
+from django.core.cache import cache
 
 BASE_URL = settings.BASE_URL
 IMAGE_URL = settings.IMAGE_URL
@@ -102,132 +103,127 @@ def app_dashboard(request):
     stream = io.BytesIO(json_data)
     python_data = JSONParser().parse(stream)
 
-    currencyCode = python_data.get('currencyCode',None)
-    countryCallingCode = python_data.get('countryCallingCode',None)
-    country = python_data.get('countryName','Egypt')
+    currencyCode = python_data.get('currencyCode', None)
+    countryCallingCode = python_data.get('countryCallingCode', None)
+    country = python_data.get('countryName', 'Egypt')
     ip_address = python_data.get('ip_address')
     user_id = python_data.get('user_id')
     country_id = python_data.get('country_id', None)
 
-    page_number = python_data.get('page_number',1)
-
-    # f("python_data--app_dashboard_dummy-->",python_data)
-    
     try:
-        if currencyCode not in [None,'','null']:
-            country = models.CountryWithCurrency.objects.filter(currency_code = currencyCode).first().country_name
-        elif countryCallingCode not in [None,'','null']:
-            country = models.CountryWithCurrency.objects.filter(country_calling_code = countryCallingCode).first().country_name
-            
+        page_number = int(python_data.get('page_number', 1))
+    except (ValueError, TypeError):
+        page_number = 1
+
+    try:
+        if currencyCode not in [None, '', 'null']:
+            c_obj = models.CountryWithCurrency.objects.filter(currency_code=currencyCode).first()
+            if c_obj:
+                country = c_obj.country_name
+        elif countryCallingCode not in [None, '', 'null']:
+            c_obj = models.CountryWithCurrency.objects.filter(country_calling_code=countryCallingCode).first()
+            if c_obj:
+                country = c_obj.country_name
         elif user_id:
-            user = models.CustomerDetail.objects.get(id = user_id)
-            countryCode = user.countryCode
-
-            if models.CountryWithCurrency.objects.filter(country_calling_code = countryCode).exists():
-                country = models.CountryWithCurrency.objects.get(country_calling_code = countryCode).country_name
-            else:
-                if country not in [None,'','null']:
-                    country = country
-                else:
-                    try:
-                        response = requests.get(f'https://ipapi.co/{ip_address}/json/')
-                        response = response.json()
-                        country = response.get("country_name")
-                        # print("response====>",response)
-
-                        if country in [None,'','null']:
-                            country = "Egypt"
-
-                    except Exception as e:
-                        # print("Errroooorrr----->",e)
+            user = models.CustomerDetail.objects.filter(id=user_id).first()
+            if user:
+                countryCode = user.countryCode
+                c_obj = models.CountryWithCurrency.objects.filter(country_calling_code=countryCode).first()
+                if c_obj:
+                    country = c_obj.country_name
+                elif country in [None, '', 'null']:
+                    if ip_address:
+                        cached_ip_country = cache.get(f"ip_country_{ip_address}")
+                        if cached_ip_country:
+                            country = cached_ip_country
+                        else:
+                            try:
+                                resp = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=1.5).json()
+                                country = resp.get("country_name") or "Egypt"
+                                cache.set(f"ip_country_{ip_address}", country, 86400)
+                            except Exception:
+                                country = "Egypt"
+                    else:
                         country = "Egypt"
-                    
-
         else:
-            if country in [None,'','null']:
-                try:
-                    response = requests.get(f'https://ipapi.co/{ip_address}/json/')
-                    response = response.json()
-                    country = response.get("country_name")
-                    # print("response====>",response)
-
-                    if country in [None,'','null']:
-                        country = "Egypt"
-
-                except Exception as e:
-                    # print("Errroooorrr----->",e)
+            if country in [None, '', 'null']:
+                if ip_address:
+                    cached_ip_country = cache.get(f"ip_country_{ip_address}")
+                    if cached_ip_country:
+                        country = cached_ip_country
+                    else:
+                        try:
+                            resp = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=1.5).json()
+                            country = resp.get("country_name") or "Egypt"
+                            cache.set(f"ip_country_{ip_address}", country, 86400)
+                        except Exception:
+                            country = "Egypt"
+                else:
                     country = "Egypt"
-            else:
-                country = country
-    except Exception as e:
-        # print("Error-=-=-=--->",e)
+    except Exception:
         country = 'Egypt'
-
-   
 
     page_record = 20
     last_row = page_record * page_number
     first_row = last_row - page_record
 
-    # get_country_name = models.ProductCountry.objects.filter(id = country_id)
-    # available_country_name = get_country_name.name
-
-    if country_id != None:
-        total_pages =  math.ceil(models.ProductDetail.objects.filter(status='Active',available_country = country_id).order_by('-id').count()/page_record)
-        
-        list_data = []
-
-        all_product_data = models.ProductDetail.objects.filter(status='Active', available_country = country_id).exclude(category__category='Intimate Universe and Comfort').order_by(Random())[first_row:last_row]
-        product_serializer = ProductDataSerializer(all_product_data, many=True, context = {'country':country}).data
-        
-
-        if user_id and page_number == 1:
-            product = models.RecentlyViewProduct.objects.filter(customer = user_id, product__status = 'Active', product__available_country = country_id).order_by('-id')[:5]
-            recently_serializer = RecentlyViewProductSerializer(product, many=True, context = {'country':country}).data
-            res = {
-                'product_list': product_serializer,
-                'total_pages':total_pages,
-                'recently_view':recently_serializer,
-                'recently_title':'Recently Browsed',
-                'recently_title_fr':'Consulté récemment'
-            }
-            json_data = JSONRenderer().render(res)
-            return HttpResponse(json_data, content_type= 'application/json', status=200)
-        else:
-            res = {
-                'product_list': product_serializer,
-                'total_pages':total_pages,
-            }
-            json_data = JSONRenderer().render(res)
-            return HttpResponse(json_data, content_type= 'application/json', status=200)
+    base_qs = models.ProductDetail.objects.filter(status='Active').exclude(category__category='Intimate Universe and Comfort')
+    if country_id is not None:
+        base_qs = base_qs.filter(available_country=country_id)
+        cache_key = f"dashboard_pids_country_{country_id}"
     else:
-        total_pages =  math.ceil(models.ProductDetail.objects.filter(status='Active').order_by('-id').count()/page_record)
-        
-        list_data = []
+        cache_key = "dashboard_pids_all"
 
-        all_product_data = models.ProductDetail.objects.filter(status='Active').exclude(category__category='Intimate Universe and Comfort').order_by(Random())[first_row:last_row]
-        product_serializer = ProductDataSerializer(all_product_data, many=True, context = {'country':country}).data
-        
+    cached_ids = cache.get(cache_key)
+    if cached_ids is None:
+        cached_ids = list(base_qs.order_by(Random()).values_list('id', flat=True)[:500])
+        cache.set(cache_key, cached_ids, 600)
 
-        if user_id and page_number == 1:
-            product = models.RecentlyViewProduct.objects.filter(customer = user_id, product__status = 'Active').order_by('-id')[:5]
-            recently_serializer = RecentlyViewProductSerializer(product, many=True, context = {'country':country}).data
-            res = {
-                'product_list': product_serializer,
-                'total_pages':total_pages,
-                'recently_view':recently_serializer,
-                'recently_title':'Recently Browsed',
-                'recently_title_fr':'Consulté récemment'
-            }
-            json_data = JSONRenderer().render(res)
-            return HttpResponse(json_data, content_type= 'application/json', status=200)
-        else:
-            res = {
-                'product_list': product_serializer,
-                'total_pages':total_pages,
-            }
-            json_data = JSONRenderer().render(res)
-            return HttpResponse(json_data, content_type= 'application/json', status=200)
+    total_records = len(cached_ids)
+    total_pages = math.ceil(total_records / page_record) if total_records > 0 else 1
+
+    slice_ids = cached_ids[first_row:last_row]
+    if slice_ids:
+        page_products = list(
+            models.ProductDetail.objects.filter(
+                id__in=slice_ids
+            ).select_related('category', 'subcategory', 'country_of_origin')
+        )
+        id_to_product = {p.id: p for p in page_products}
+        all_product_data = [id_to_product[pid] for pid in slice_ids if pid in id_to_product]
+    else:
+        all_product_data = []
+
+    product_serializer = ProductDataSerializer(all_product_data, many=True, context={'country': country}).data
+
+    if user_id and page_number == 1:
+        recently_qs = models.RecentlyViewProduct.objects.filter(
+            customer=user_id,
+            product__status='Active'
+        )
+        if country_id is not None:
+            recently_qs = recently_qs.filter(product__available_country=country_id)
+
+        recently_products = recently_qs.select_related(
+            'product', 'product__category', 'product__subcategory', 'product__country_of_origin'
+        ).order_by('-id')[:5]
+
+        recently_serializer = RecentlyViewProductSerializer(recently_products, many=True, context={'country': country}).data
+        res = {
+            'product_list': product_serializer,
+            'total_pages': total_pages,
+            'recently_view': recently_serializer,
+            'recently_title': 'Recently Browsed',
+            'recently_title_fr': 'Consulté récemment'
+        }
+    else:
+        res = {
+            'product_list': product_serializer,
+            'total_pages': total_pages,
+        }
+
+    json_data = JSONRenderer().render(res)
+    return HttpResponse(json_data, content_type='application/json', status=200)
 
 
 @csrf_exempt

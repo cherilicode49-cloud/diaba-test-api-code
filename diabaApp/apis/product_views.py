@@ -19,7 +19,7 @@ from django.db import connection, transaction
 from django.db.models.functions import Replace, Lower, Greatest
 import uuid
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 import numpy as np
 import re
 from django.core.cache import cache
@@ -1296,45 +1296,50 @@ def product_detail_vendor(request):
 def product_detail_app(request):
     if request.method == 'POST':
         python_data = JSONParser().parse(io.BytesIO(request.body))
-        print(python_data, 'python_data customer ')
         id = python_data.get('id')
         customer = python_data.get('customer')
 
-        currencyCode = python_data.get('currencyCode',None)
-        country = python_data.get('countryName','Egypt')
+        currencyCode = python_data.get('currencyCode', None)
+        country = python_data.get('countryName', 'Egypt')
         ip_address = python_data.get('ip_address')
-        
-        price_update = models.DailyPrice.objects.last()
-        # daily_price = DailyPriceSerializer(price_update).data
 
-        get_delivery_data = models.DeliveryDayDetail.objects.first()
-    
+        get_delivery_data = cache.get_or_set(
+            'delivery_day_detail_first',
+            lambda: models.DeliveryDayDetail.objects.first(),
+            600
+        )
+
         now = datetime.now()
         date_time = now.strftime('%Y-%m-%d, %H:%M:%S')
 
-        product = models.ProductDetail.objects.get(id = id)
-        
+        product = models.ProductDetail.objects.filter(id=id).select_related('subcategory', 'category').first()
+        if not product:
+            res = {'message': 'Product not found'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=404)
+
         delay_days_air = 0
         delay_days_ship = 0
         delay_days_express = 0
-        if product.delay_days_air not in [None,'','null']:
+        if product.delay_days_air not in [None, '', 'null']:
             delay_days_air = product.delay_days_air
-        if product.delay_days_ship not in [None,'','null']:
+        if product.delay_days_ship not in [None, '', 'null']:
             delay_days_ship = product.delay_days_ship
-        if product.delay_days_express not in [None,'','null']:
+        if product.delay_days_express not in [None, '', 'null']:
             delay_days_express = product.delay_days_express
 
-     
+        express_delivery_days = get_delivery_data.express_delivery if get_delivery_data else 0
+        air_delivery_days = get_delivery_data.air_delivery if get_delivery_data else 0
+        ship_delivery_days = get_delivery_data.ship_delivery if get_delivery_data else 0
 
-        express_date_now = now + timedelta(days=get_delivery_data.express_delivery + delay_days_express )
+        express_date_now = now + timedelta(days=express_delivery_days + delay_days_express)
         express_date = express_date_now.strftime('%d').lower()
         express_month = express_date_now.strftime('%B').lower()
-        
-        air_date_now = now + timedelta(days=get_delivery_data.air_delivery + delay_days_air)
+
+        air_date_now = now + timedelta(days=air_delivery_days + delay_days_air)
         air_date = air_date_now.strftime('%d').lower()
         air_month = air_date_now.strftime('%B').lower()
-        
-        ship_date_now = now + timedelta(days=get_delivery_data.ship_delivery + delay_days_ship)
+
+        ship_date_now = now + timedelta(days=ship_delivery_days + delay_days_ship)
         ship_date = ship_date_now.strftime('%d').lower()
         ship_month = ship_date_now.strftime('%B').lower()
 
@@ -1352,10 +1357,10 @@ def product_detail_app(request):
             "november": "novembre",
             "december": "décembre"
         }
-        express_fr_month = month_map.get(express_month)
-        air_fr_month = month_map.get(air_month)
-        ship_fr_month = month_map.get(ship_month)
-        
+        express_fr_month = month_map.get(express_month, express_month)
+        air_fr_month = month_map.get(air_month, air_month)
+        ship_fr_month = month_map.get(ship_month, ship_month)
+
         express_en = f"before {express_date} {express_month}"
         express_fr = f"avant le {express_date} {express_fr_month}"
         air_en = f"before {air_date} {air_month}"
@@ -1363,351 +1368,185 @@ def product_detail_app(request):
         ship_en = f"before {ship_date} {ship_month}"
         ship_fr = f"avant le {ship_date} {ship_fr_month}"
 
-
-
-
+        # Resolve country and delivery_country
         try:
-            if currencyCode not in [None,'','null']:
+            if currencyCode not in [None, '', 'null']:
+                c_obj = models.CountryWithCurrency.objects.filter(currency_code=currencyCode).first()
+                if c_obj:
+                    country = c_obj.country_name
                 if customer:
-                    country = models.CountryWithCurrency.objects.filter(currency_code = currencyCode).first().country_name
-                    
-                    user = models.CustomerDetail.objects.get(id = customer)
-                    delivery_country = user.country
+                    user = models.CustomerDetail.objects.filter(id=customer).first()
+                    delivery_country = user.country if user and user.country else country
                 else:
                     delivery_country = country
-                    country = models.CountryWithCurrency.objects.filter(currency_code = currencyCode).first().country_name
-
             elif customer:
-                user = models.CustomerDetail.objects.get(id = customer)
-                countryCode = user.countryCode
-
-                if models.CountryWithCurrency.objects.filter(country_calling_code = countryCode).exists():
-                    country = models.CountryWithCurrency.objects.get(country_calling_code = countryCode).country_name
-                    delivery_country = country
-                else:
-                    if country not in [None,'','null']:
+                user = models.CustomerDetail.objects.filter(id=customer).first()
+                if user and user.countryCode:
+                    countryCode = user.countryCode
+                    c_obj = models.CountryWithCurrency.objects.filter(country_calling_code=countryCode).first()
+                    if c_obj:
+                        country = c_obj.country_name
                         delivery_country = country
                     else:
-                        try:
-                            response = requests.get(f'https://ipapi.co/{ip_address}/json/')
-                            response = response.json()
-                            country = response.get("country_name")
-                            # print("response====>",response)
-                            delivery_country = country
-                            if country in [None,'','null']:
+                        if country in [None, '', 'null']:
+                            if ip_address:
+                                cached_ip = cache.get(f"ip_country_{ip_address}")
+                                if cached_ip:
+                                    country = cached_ip
+                                else:
+                                    try:
+                                        resp = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=1.5).json()
+                                        country = resp.get("country_name") or "Egypt"
+                                        cache.set(f"ip_country_{ip_address}", country, 86400)
+                                    except Exception:
+                                        country = "Egypt"
+                            else:
                                 country = "Egypt"
-
-                        except Exception as e:
-                            # print("Errroooorrr----->",e)
-                            country = "Egypt"
-                            delivery_country = country
-                        
-
-            else:
-                if country in [None,'','null']:
-                    try:
-                        response = requests.get(f'https://ipapi.co/{ip_address}/json/')
-                        response = response.json()
-                        country = response.get("country_name")
-                        # print("response====>",response)
-
                         delivery_country = country
-
-                        if country in [None,'','null']:
-                            country = "Egypt"
-
-                    except Exception as e:
-                        # print("Errroooorrr----->",e)
-                        country = "Egypt"
                 else:
-                    try:
-                        response = requests.get(f'https://ipapi.co/{ip_address}/json/')
-                        response = response.json()
-                        delivery_country = response.get("country_name")
-                        print("response====>",response)
-
-                        if delivery_country in [None,'','null']:
-                            delivery_country = country
-
-                    except Exception as e:
-                        # print("Errroooorrr----->",e)
-                        delivery_country = country
-                        
-                    country = country
-        except Exception as e:
-            # print("Error-=-=-=--->",e)
+                    delivery_country = country or "Egypt"
+            else:
+                if country in [None, '', 'null']:
+                    if ip_address:
+                        cached_ip = cache.get(f"ip_country_{ip_address}")
+                        if cached_ip:
+                            country = cached_ip
+                        else:
+                            try:
+                                resp = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=1.5).json()
+                                country = resp.get("country_name") or "Egypt"
+                                cache.set(f"ip_country_{ip_address}", country, 86400)
+                            except Exception:
+                                country = "Egypt"
+                    else:
+                        country = "Egypt"
+                    delivery_country = country
+                else:
+                    delivery_country = country
+        except Exception:
             country = 'Egypt'
             delivery_country = country
 
+        # Review data and aggregates
+        reviews_qs = models.ProductReview.objects.filter(product=id)
+        review_serialiser = ProductReviewSerializer(reviews_qs.order_by('-id')[:5], many=True).data
+        review_stats = reviews_qs.aggregate(total_count=Count('id'), total_sum=Sum('rating'))
+        total_review = review_stats['total_count'] or 0
+        average_review = round(float(review_stats['total_sum'] or 0) / total_review, 1) if total_review > 0 else 0
 
-        # print(delivery_country, 'delivery_countrydelivery_country')
-        product_review_data = models.ProductReview.objects.filter(product = id).order_by('-id')[:5]
-        review_serialiser = ProductReviewSerializer(product_review_data, many=True).data
-        
-        payment_data = models.PaymentCargoSlider.objects.filter(status = 'Active')
-        slider_serialser = PaymentCargoSliderSerializer(payment_data, many=True).data
+        # Cached sliders and notes
+        slider_data = cache.get_or_set(
+            'payment_cargo_slider_active',
+            lambda: list(models.PaymentCargoSlider.objects.filter(status='Active')),
+            600
+        )
+        slider_serialser = PaymentCargoSliderSerializer(slider_data, many=True).data
 
-        important_note = models.ImportantNote.objects.filter(status = 'Active').first()
-        # print("important_note---->",important_note)
-        if important_note:
-            note_serialser = ImportantNoteSerializer(important_note).data
-        else:
-            note_serialser=None
-        
-        # print("note_serialser---->",note_serialser)
-        
+        important_note = cache.get_or_set(
+            'important_note_active',
+            lambda: models.ImportantNote.objects.filter(status='Active').first(),
+            600
+        )
+        note_serialser = ImportantNoteSerializer(important_note).data if important_note else None
 
-        total_review = models.ProductReview.objects.filter(product = id).count()
-        average_review = 0
-        if total_review > 0:
-            get_rating = list(models.ProductReview.objects.filter(product = id).values_list('rating', flat=True))
-            average_review = round(sum(get_rating) / total_review, 1)
-            # print(get_rating, 'get_rating', average_review)   
+        # Product details & images
+        data = ProductDetailAppSerializer(product, context={'country': country, 'delivery_country': delivery_country}).data
+        subcategory = product.subcategory.id if product.subcategory else None
+
+        get_image = models.ProductImage.objects.filter(product=id)
+        image_serializer = ProductImageSerializer(get_image, many=True).data
+
+        get_other_specification = models.ProductOtherSpecification.objects.filter(product=id)
+        other_serializer = ProductOtherSpecificationSerializer(get_other_specification, many=True).data
+        data.update({'image': image_serializer, 'other_data': other_serializer})
+
+        # Batch load models and variants in 2 single queries
+        all_models = list(models.ProductModel.objects.filter(product=id).order_by('-id'))
+        all_variants = list(models.ProductModelVariant.objects.filter(model__in=all_models).order_by('-id'))
+        variants_by_model = defaultdict(list)
+        for v in all_variants:
+            variants_by_model[v.model_id].append(v)
+
+        # Batch load cart quantities & wishlist flag if customer
+        cart_quantities = {}
+        wishlist_flag = False
+        total_quantity = 0
 
         if customer:
-            product_check = models.ProductDetail.objects.filter(id = id).count()
-            if product_check == 1:
-                wishlist_count = models.WishlistDetail.objects.filter(customer = customer, product = id).count()
-                if wishlist_count == 1:
-                    wishlist_flag = True
-                else:
-                    wishlist_flag = False
+            wishlist_flag = models.WishlistDetail.objects.filter(customer=customer, product=id).exists()
+            cart_quantities = dict(models.CartDetail.objects.filter(customer=customer, product=id).values_list('variant_id', 'quantity'))
 
-                product = models.ProductDetail.objects.get(id = id)
-                data = ProductDetailAppSerializer(product, context = {'country':country,'delivery_country':delivery_country}).data                
-                subcategory = product.subcategory.id
+        list_model = []
+        for m in all_models:
+            model_serializer = ProductModelSerializer(m).data
+            m_variants = variants_by_model.get(m.id, [])
+            list_variant = []
+            for v in m_variants:
+                variant_serializer = ProductModelVariantSerializer(v, context={'country': country}).data
+                if customer:
+                    cart_qty = cart_quantities.get(v.id, 0)
+                    if cart_qty not in [0, None, '', 'null']:
+                        try:
+                            qty_int = int(cart_qty)
+                        except (ValueError, TypeError):
+                            qty_int = 0
+                        total_quantity += qty_int
+                        variant_serializer['cart_quantity'] = cart_qty
+                    else:
+                        variant_serializer['cart_quantity'] = 0
+                list_variant.append(variant_serializer)
 
-                get_image = models.ProductImage.objects.filter(product = id)
-                image_serializer = ProductImageSerializer(get_image, many=True).data
+            model_serializer['variants'] = list_variant
+            list_model.append(model_serializer)
 
-                get_other_specification = models.ProductOtherSpecification.objects.filter(product = id)
-                other_serializer = ProductOtherSpecificationSerializer(get_other_specification, many=True).data
-
-                list_model = []
-                total_quantity = 0 
-                all_model = models.ProductModel.objects.filter(product = id).order_by('-id')
-                for model in all_model:
-                    model = models.ProductModel.objects.get(id = model.id)
-                    model_serializer = ProductModelSerializer(model).data
-                    get_variants = models.ProductModelVariant.objects.filter(model = model.id).order_by('-id')
-                    list_variant = []
-                    for variant in get_variants:
-                        variants_data = models.ProductModelVariant.objects.get(id = variant.id)
-                        variant_serilizer = ProductModelVariantSerializer(variants_data, context = {'country':country}).data
-
-                        # check for delay note:
-
-                        # vendor_qs = models.VendorProductPrice.objects.filter(
-                        #     variant=variants_data
-                        # ).values_list('vendor', flat=True).distinct()
-
-                        # vendor_count = vendor_qs.count()
-
-                        # delay_notes_qs = models.VendorDelayNote.objects.filter(
-                        #     vendor__in=vendor_qs,
-                        #     start_at__lte=now,
-                        #     end_at__gte=now,
-                        #     status="Active"
-                        # )
-
-                        # delay_note_vendor_count = delay_notes_qs.count()
-
-                        # note = None
-
-                        # if vendor_count > 0 and delay_note_vendor_count == vendor_count:
-                        #     note = delay_notes_qs.order_by('-id').values_list('note', flat=True).first()
-
-                        # variant_serilizer.update({'delay_note': note})                        
-                        
-                        check_varient = models.CartDetail.objects.filter(customer = customer, product = id, variant = variant.id).count()
-                        # print(check_varient, 'check_varient')
-                        if check_varient != 0:
-                            cart_quantity = models.CartDetail.objects.filter(customer = customer, product = id, variant = variant.id).values_list('quantity', flat=True)[0]
-                            total_quantity += int(cart_quantity)
-                            variant_serilizer.update({'cart_quantity':cart_quantity})
-                        else:
-                            variant_serilizer.update({'cart_quantity':0})
-
-                        # variant_serilizer.update({'vendor_list':price_serializer})
-                        list_variant.append(variant_serilizer)
-
-
-                    model_serializer.update({'variants':list_variant})    
-                    
-                    list_model.append(model_serializer)
-                
-                data.update({'image':image_serializer, 'other_data':other_serializer})
-                # print(data, 'afasf')
-                
-                all_related_product = models.ProductDetail.objects.filter(subcategory = subcategory, status='Active')[:10]
-                list_related_product = []
-                for related_product in all_related_product:
-                    current_id = related_product.id
-                    if product.id != current_id:
-                        current_data = models.ProductDetail.objects.get(id = current_id)
-                        product_serializer = ProductDataSerializer(current_data,context = {'country':country}).data
-                        list_related_product.append(product_serializer)
-
-                # print(list_related_product, 'list_related_product')
-
-                check_review_product = models.RecentlyViewProduct.objects.filter(customer = customer, product = id).count()
-                if check_review_product == 1:
-                    get_review_product = models.RecentlyViewProduct.objects.get(customer = customer, product = id)
-                    get_review_product.delete()
-
-                    get_review_product = models.RecentlyViewProduct.objects.create(
-                        customer_id = customer, 
-                        product_id = id,
-                        created_at = date_time
-
-                    ).save()
-
-                elif check_review_product == 0:
-                    get_review_product = models.RecentlyViewProduct.objects.create(
-                        customer_id = customer, 
-                        product_id = id,
-                        created_at = date_time
-
-                    ).save()
-
-                track_user_activity(
-                    action_type='PRODUCT_VIEW',
-                    customer_id=customer,
-                    product_id=product.id,
-                    product_name=product.product_name,
-                    country=country,
-                    ip_address=request.META.get('REMOTE_ADDR')
-                )
-
-            # air_fr = f'avant le {}'
-                                    
-            res={
-                'data':data,
-                'models':list_model, 
-                'wishlist_flag':wishlist_flag,
-                # 'cart_detail':cart_detail_serialiser, 
-                # 'daily_price':daily_price,
-                'list_related_product':list_related_product,
-                'express_en':express_en,
-                'express_fr':express_fr,
-                'air_en':air_en,
-                'air_fr':air_fr,
-                'ship_en':ship_en,
-                'ship_fr':ship_fr,
-                'total_review':total_review,
-                'average_review':average_review,
-                'review_data':review_serialiser,
-                'payment_cargo_slider':slider_serialser,
-                'important_note':note_serialser,
-                'total_quantity':total_quantity
-                
-            }
-            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
-
+        # Batch load related products in 1 query with select_related
+        if subcategory:
+            related_products = models.ProductDetail.objects.filter(
+                subcategory=subcategory,
+                status='Active'
+            ).exclude(id=product.id).select_related('category', 'subcategory', 'country_of_origin')[:10]
+            list_related_product = ProductDataSerializer(related_products, many=True, context={'country': country}).data
         else:
-            product_check = models.ProductDetail.objects.filter(id = id).count()
-            if product_check == 1:
-                
-                product = models.ProductDetail.objects.get(id = id)
-                track_user_activity(
-                    action_type='PRODUCT_VIEW',
-                    customer_id=None,
-                    product_id=product.id,
-                    product_name=product.product_name,
-                    country=country,
-                    ip_address=request.META.get('REMOTE_ADDR')
-                )
-                data = ProductDetailAppSerializer(product,context = {'country':country,'delivery_country':delivery_country}).data
+            list_related_product = []
 
+        if customer:
+            models.RecentlyViewProduct.objects.update_or_create(
+                customer_id=customer,
+                product_id=id,
+                defaults={'created_at': date_time}
+            )
 
-                # print('data---->',data)
+        track_user_activity(
+            action_type='PRODUCT_VIEW',
+            customer_id=customer if customer else None,
+            product_id=product.id,
+            product_name=product.product_name,
+            country=country,
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
 
-                subcategory = product.subcategory.id
+        res = {
+            'data': data,
+            'models': list_model,
+            'list_related_product': list_related_product,
+            'express_en': express_en,
+            'express_fr': express_fr,
+            'air_en': air_en,
+            'air_fr': air_fr,
+            'ship_en': ship_en,
+            'ship_fr': ship_fr,
+            'total_review': total_review,
+            'average_review': average_review,
+            'review_data': review_serialiser,
+            'payment_cargo_slider': slider_serialser,
+            'important_note': note_serialser
+        }
 
-                get_image = models.ProductImage.objects.filter(product = id)
-                image_serializer = ProductImageSerializer(get_image, many=True).data
+        if customer:
+            res['wishlist_flag'] = wishlist_flag
+            res['total_quantity'] = total_quantity
 
-                get_other_specification = models.ProductOtherSpecification.objects.filter(product = id)
-                other_serializer = ProductOtherSpecificationSerializer(get_other_specification, many=True).data 
-                
-
-                list_model = []
-
-                all_model = models.ProductModel.objects.filter(product = id).order_by('-id')
-                for model in all_model:
-                    model = models.ProductModel.objects.get(id = model.id)
-                    model_serializer = ProductModelSerializer(model).data
-                    get_variants = models.ProductModelVariant.objects.filter(model = model.id).order_by('-id')
-                    list_variant = []
-                    for variant in get_variants:
-                        variants_data = models.ProductModelVariant.objects.get(id = variant.id)
-                        variant_serilizer = ProductModelVariantSerializer(variants_data,context = {'country':country}).data
-                        
-                        # variant_serilizer.update({'vendor_list':price_serializer})
-                        
-                        # check for delay note:
-
-                        # vendor_qs = models.VendorProductPrice.objects.filter(
-                        #     variant=variants_data
-                        # ).values_list('vendor', flat=True).distinct()
-
-                        # vendor_count = vendor_qs.count()
-
-                        # delay_notes_qs = models.VendorDelayNote.objects.filter(
-                        #     vendor__in=vendor_qs,
-                        #     start_at__lte=now,
-                        #     end_at__gte=now,
-                        #     status="Active"
-                        # )
-
-                        # delay_note_vendor_count = delay_notes_qs.count()
-
-                        # note = None
-
-                        # if vendor_count > 0 and delay_note_vendor_count == vendor_count:
-                        #     note = delay_notes_qs.order_by('-id').values_list('note', flat=True).first()
-
-                        # variant_serilizer.update({'delay_note': note})
-
-                        list_variant.append(variant_serilizer)
-
-                    model_serializer.update({'variants':list_variant})
-                    
-                    list_model.append(model_serializer)
-                
-                data.update({'image':image_serializer, 'other_data':other_serializer})
-
-                all_related_product = models.ProductDetail.objects.filter(subcategory = subcategory, status='Active')[:10]
-                list_related_product = []
-                for related_product in all_related_product:
-                    current_id = related_product.id
-                    if product.id != current_id:
-                        current_data = models.ProductDetail.objects.get(id = current_id)
-                        product_serializer = ProductDataSerializer(current_data,context = {'country':country}).data
-                        list_related_product.append(product_serializer)
-
-               
-            
-
-            res={
-                'data':data,
-                'models':list_model,
-                # 'daily_price':daily_price,
-                'list_related_product':list_related_product,
-                'express_en':express_en,
-                'express_fr':express_fr,
-                'air_en':air_en,
-                'air_fr':air_fr,
-                'ship_en':ship_en,
-                'ship_fr':ship_fr,
-                'total_review':total_review,
-                'average_review':average_review,
-                'review_data':review_serialiser,
-                'payment_cargo_slider':slider_serialser,
-                'important_note':note_serialser
-                
-            }
-            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
 
 
 @csrf_exempt
@@ -2587,41 +2426,52 @@ def all_product_list(request):
         product_verification='Approved'
     ).exclude(status='bulk').count()
 
-    total_pending_records = models.ProductDetail.objects.filter(
-        product_verification='Pending'
-    ).count()
+    total_pending_records = cache.get_or_set(
+        'total_pending_product_records',
+        lambda: models.ProductDetail.objects.filter(
+            product_verification='Pending'
+        ).count(),
+        30
+    )
 
-    pending_inquiry_count = models.ProductInquiry.objects.filter(
-        status="Pending"
-    ).count()
+    pending_inquiry_count = cache.get_or_set(
+        'pending_inquiry_count_all',
+        lambda: models.ProductInquiry.objects.filter(
+            status="Pending"
+        ).count(),
+        30
+    )
 
-    # Product List
+    # Product List with select_related for related serializer lookups
     all_product = models.ProductDetail.objects.filter(
         filter_condition,
         product_verification='Approved'
     ).exclude(
         status='bulk'
-    ).order_by('-id')[first_row:last_row]
+    ).select_related('category', 'subcategory', 'vendor').order_by('-id')[first_row:last_row]
 
-    list_data = []
+    all_product_list_p = list(all_product)
+    product_ids = [p.id for p in all_product_list_p]
 
-    for product in all_product:
-
-        # Aggregate Min/Max Price
-        price_data = models.ProductModelVariant.objects.filter(
-            product=product
-        ).aggregate(
+    # Single batch query for price aggregates across all page products
+    price_map = {}
+    if product_ids:
+        for row in models.ProductModelVariant.objects.filter(
+            product_id__in=product_ids
+        ).values('product_id').annotate(
             max_price=Max('price'),
             min_price=Min('price')
-        )
+        ):
+            price_map[row['product_id']] = row
 
+    list_data = []
+    for product in all_product_list_p:
+        price_data = price_map.get(product.id, {'max_price': None, 'min_price': None})
         serializer = ProductDetailSerializer(product).data
-
         serializer.update({
-            'max_price': price_data['max_price'],
-            'min_price': price_data['min_price']
+            'max_price': price_data.get('max_price'),
+            'min_price': price_data.get('min_price')
         })
-
         list_data.append(serializer)
 
     # Response
