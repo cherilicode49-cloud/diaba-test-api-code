@@ -98,9 +98,14 @@ def order_create(request):
             print("payment_type----0-0-0000>",payment_type)
             check_gateway = models.MoneyNetwork.objects.get(value = network)
             if check_gateway.label.startswith(('Orange Money', 'Wave')):
-                price = math.ceil(total_price * 1.025)
-                tax_price = math.ceil(price - total_price) 
-                total_price = math.ceil(price)
+                if currency == 'USD':
+                    price = round(float(total_price) * 1.025, 2)
+                    tax_price = round(price - float(total_price), 2)
+                    total_price = round(price, 2)
+                else:
+                    price = math.ceil(total_price * 1.025)
+                    tax_price = math.ceil(price - total_price) 
+                    total_price = math.ceil(price)
                 result = APIDTSClient.cash_in(total_price, mobileNumber, network, currency)
                 # print(result, 'result')
                 if result.get('error'):

@@ -21,12 +21,12 @@ CACHE_CATEGORIES = []
 TEXT_FEATURES = None
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-clip_model, preprocess = clip.load("ViT-B/32", device=device)
-
-# model = torchmodels.efficientnet_b0(weights=torchmodels.EfficientNet_B0_Weights.DEFAULT)
-# model.eval()
-# model = model.to(device)
-feature_extractor = torch.nn.Sequential(*list(clip_model.children())[:-1]).to(device)
+try:
+    clip_model, preprocess = clip.load("ViT-B/32", device=device)
+    feature_extractor = torch.nn.Sequential(*list(clip_model.children())[:-1]).to(device)
+except (MemoryError, Exception) as e:
+    print(f"Warning: Could not load CLIP model in faiss_store ({e}).")
+    clip_model, preprocess, feature_extractor = None, None, None
 
 def build_faiss_index():
 

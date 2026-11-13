@@ -163,7 +163,10 @@ transform = transforms.Compose([
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model, preprocess = clip.load("ViT-B/32", device=device)
+try:
+    model, preprocess = clip.load("ViT-B/32", device=device)
+except (MemoryError, Exception) as e:
+    model, preprocess = None, None
 
 FAISS_INDEX = None
 FAISS_IDS = None
@@ -5912,14 +5915,14 @@ def customer_wishlist_cart_list(request):
                     list_product_amount.append(product_total)
                     
                     per_product_cart_serializer['shipping_cost_per_product'] = shipping_cost_per_product
-                    per_product_cart_serializer['product_total'] = int(round(float(product_total)))
+                    per_product_cart_serializer['product_total'] = round(float(product_total), 2)
 
                     cart_data_list.append(per_product_cart_serializer)
                 
-                total_price = math.ceil(sum(list_product_amount))
-                total_air = math.ceil(sum(list_air))
-                total_ship = math.ceil(sum(list_ship))
-                total_express = math.ceil(sum(list_express))
+                total_price = round(sum(list_product_amount), 2)
+                total_air = round(sum(list_air), 2)
+                total_ship = round(sum(list_ship), 2)
+                total_express = round(sum(list_express), 2)
 
                 # print(total_price, total_air, total_ship)
                 if promocode:
@@ -5928,26 +5931,25 @@ def customer_wishlist_cart_list(request):
                         get_promocode = models.PromocodeDetail.objects.get(promocode = promocode)
                         discount = get_promocode.discount
                         # print(discount, 'discount')
-                        discount_price = round(int(total_price) * int(discount)/100)
+                        discount_price = round(float(total_price) * float(discount) / 100, 2)
                         # print(total_price, 'total_price')
-                        price_after_discount = math.ceil(total_price - discount_price)
+                        price_after_discount = round(float(total_price) - float(discount_price), 2)
 
-
-                        amount_to_paid = math.ceil(price_after_discount + total_air + total_ship + total_express)
-                        amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.015)
+                        amount_to_paid = round(float(price_after_discount) + float(total_air) + float(total_ship) + float(total_express), 2)
+                        amount_to_paid_with_tax = round(float(amount_to_paid) * 1.015, 2)
                         # print(amount_to_paid_with_tax, 'amount_to_paid_with_tax')
                         
                         res={
                             'data':cart_data_list,
-                            'total_price' :f"{total_price:,}".replace(",", " "),
-                            'discount_price':f"{discount_price:,}".replace(",", " "), 
+                            'total_price' :f"{float(total_price):,.2f}".replace(",", " "),
+                            'discount_price':f"{float(discount_price):,.2f}".replace(",", " "), 
                             'discount_percentage': discount, 
-                            'price_after_discount': f"{price_after_discount:,}".replace(",", " "),
-                            'total_air' :  f"{total_air:,}".replace(",", " "),
-                            'total_ship' :  f"{total_ship:,}".replace(",", " "),
-                            'total_express' :  f"{total_express:,}".replace(",", " "),
-                            'amount_to_paid_view': f"{amount_to_paid:,}".replace(",", " "),
-                            'amount_to_paid_with_tax_view': f"{amount_to_paid_with_tax:,}".replace(",", " "),
+                            'price_after_discount': f"{float(price_after_discount):,.2f}".replace(",", " "),
+                            'total_air' :  f"{float(total_air):,.2f}".replace(",", " "),
+                            'total_ship' :  f"{float(total_ship):,.2f}".replace(",", " "),
+                            'total_express' :  f"{float(total_express):,.2f}".replace(",", " "),
+                            'amount_to_paid_view': f"{float(amount_to_paid):,.2f}".replace(",", " "),
+                            'amount_to_paid_with_tax_view': f"{float(amount_to_paid_with_tax):,.2f}".replace(",", " "),
                             'amount_to_paid': amount_to_paid,
                             'amount_to_paid_with_tax': amount_to_paid_with_tax,
                             'coupon_verify':True
@@ -5958,18 +5960,18 @@ def customer_wishlist_cart_list(request):
                         }
                         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=406)
                 else:
-                    amount_to_paid = math.ceil(total_price + total_air + total_ship + total_express)
-                    amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.015)
+                    amount_to_paid = round(float(total_price) + float(total_air) + float(total_ship) + float(total_express), 2)
+                    amount_to_paid_with_tax = round(float(amount_to_paid) * 1.015, 2)
                     # print(amount_to_paid_with_tax, 'amount_to_paid_with_tax')
                     
                     res={
                         'data':cart_data_list,
-                        'total_price' :  f"{total_price:,}".replace(",", " "),
-                        'total_air' :  f"{total_air:,}".replace(",", " "),
-                        'total_ship' :  f"{total_ship:,}".replace(",", " "),
-                        'total_express': f"{total_express:,}".replace(",", " "),
-                        'amount_to_paid_view': f"{amount_to_paid:,}".replace(",", " "),
-                        'amount_to_paid_with_tax_view': f"{amount_to_paid_with_tax:,}".replace(",", " "),
+                        'total_price' :  f"{float(total_price):,.2f}".replace(",", " "),
+                        'total_air' :  f"{float(total_air):,.2f}".replace(",", " "),
+                        'total_ship' :  f"{float(total_ship):,.2f}".replace(",", " "),
+                        'total_express': f"{float(total_express):,.2f}".replace(",", " "),
+                        'amount_to_paid_view': f"{float(amount_to_paid):,.2f}".replace(",", " "),
+                        'amount_to_paid_with_tax_view': f"{float(amount_to_paid_with_tax):,.2f}".replace(",", " "),
                         'amount_to_paid_with_tax': amount_to_paid_with_tax,
                         'amount_to_paid': amount_to_paid,
                         'coupon_verify':False
@@ -19110,8 +19112,11 @@ def bulk_upload(request):
             new_sheet[f"{letters[24]}1"] = "Reasons"
             continue
 
-        if row[0] is None:
-            break
+        if not row or not any(cell is not None and str(cell).strip() != '' for cell in row):
+            continue
+
+        if row[0] is None or str(row[0]).strip() == '':
+            continue
 
         # -------- READ VALUES -------- #
         category = str(row[0]).strip()
@@ -19342,8 +19347,6 @@ def bulk_upload_submit(request):
     try:
         python_data = JSONParser().parse(io.BytesIO(request.body))
         link = python_data.get('link')
-        link = SITE_MEDIA_BASE_URL + link
-
 
         if not link:
             return HttpResponse(
@@ -19351,14 +19354,51 @@ def bulk_upload_submit(request):
                 content_type='application/json'
             )
 
+        link_str = str(link).strip()
+        if link_str.startswith('http://') or link_str.startswith('https://'):
+            pass
+        else:
+            link_str = SITE_MEDIA_BASE_URL + link_str
+
         # -------- READ FILE FROM S3 -------- #
-        filename = os.path.basename(link)
+        filename = os.path.basename(link_str)
 
         with fs.open(filename, 'rb') as f:
-
             workbook = load_workbook(f)
 
         sheet = workbook.active
+
+        created_count = 0
+        skipped_rows = []
+        last_vendor_obj = None
+
+        def safe_str(val, default=""):
+            if val is None:
+                return default
+            return str(val).strip()
+
+        def safe_float(val, default=0.0):
+            if val is None:
+                return default
+            try:
+                cleaned = str(val).replace(',', '').strip()
+                return float(cleaned) if cleaned != '' else default
+            except (ValueError, TypeError):
+                return default
+
+        def safe_int(val, default=0):
+            if val is None:
+                return default
+            try:
+                cleaned = str(val).replace(',', '').strip()
+                return int(float(cleaned)) if cleaned != '' else default
+            except (ValueError, TypeError):
+                return default
+
+        def get_val(r, idx, default=None):
+            if len(r) > idx and r[idx] is not None:
+                return r[idx]
+            return default
 
         # -------- LOOP THROUGH EXCEL -------- #
         for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
@@ -19366,176 +19406,262 @@ def bulk_upload_submit(request):
             if row_index == 1:
                 continue  # skip header
 
-            if not row or not row[0]:
+            if not row or not any(cell is not None and str(cell).strip() != "" for cell in row):
                 continue
 
-            # -------- SAFE DATA EXTRACTION -------- #
-            category = str(row[0] or "").strip()
-            subcategory = str(row[1] or "").strip()
-            unit_of_measure = str(row[2] or "").lower()
-            shipping_via = str(row[3] or "").title()
-            country_of_origin = str(row[4] or "").strip()
+            # Safe data extraction
+            category = safe_str(get_val(row, 0))
+            subcategory = safe_str(get_val(row, 1))
+            unit_of_measure = safe_str(get_val(row, 2), "pcs").lower()
+            shipping_via = safe_str(get_val(row, 3), "By Air").title()
+            country_of_origin = safe_str(get_val(row, 4))
 
-            available_country = [v.strip() for v in str(row[5] or "").split(",") if v]
-            tags = [t.strip() for t in str(row[6] or "").split(",") if t]
+            raw_avail = safe_str(get_val(row, 5))
+            available_country = [v.strip() for v in raw_avail.split(",") if v.strip()]
+            raw_tags = safe_str(get_val(row, 6))
+            tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
 
-            product_name = str(row[7] or "").strip()
-            description = str(row[8] or "").strip()
+            product_name = safe_str(get_val(row, 7))
+            description = safe_str(get_val(row, 8))
 
-            price = float(row[9] or 0)
-            final_price = float(row[10] or 0)
-            min_order_quantity = int(float(row[11] or 1))
+            price = safe_float(get_val(row, 9), 0.0)
+            final_price = safe_float(get_val(row, 10), price)
+            min_order_quantity = safe_int(get_val(row, 11), 1)
+            if min_order_quantity < 1:
+                min_order_quantity = 1
 
-            length = float(row[12] or 0)
-            width = float(row[13] or 0)
-            height = float(row[14] or 0)
-            weight = float(row[15] or 0)
+            length = safe_float(get_val(row, 12), 0.0)
+            width = safe_float(get_val(row, 13), 0.0)
+            height = safe_float(get_val(row, 14), 0.0)
+            weight = safe_float(get_val(row, 15), 0.0)
 
-            vendor = str(row[16] or "").strip()
-            reuser = row[17]
-            refpro = row[18]
+            vendor = safe_str(get_val(row, 16))
+            reuser = safe_str(get_val(row, 17))
+            refpro = safe_str(get_val(row, 18))
 
-            product_type = str(row[19] or "").strip()
-            product_packaging = str(row[20] or "").strip()
-            product_packaging_value = int(row[21] or 0)
+            product_type = safe_str(get_val(row, 19))
+            product_packaging = safe_str(get_val(row, 20))
+            product_packaging_value = safe_int(get_val(row, 21), 0)
 
-            # -------- FETCH DATABASE OBJECTS -------- #
-            category_obj = models.CategoryDetail.objects.filter(
-                Q(category__iexact=category) | Q(category_french__iexact=category)
-            ).first()
-
-            subcategory_obj = models.SubCategoryDetail.objects.filter(
-                Q(subcategory__iexact=subcategory) | Q(subcategory_french__iexact=subcategory)
-            ).first()
-
-            product_type_obj = models.ProductType.objects.filter(
-                product_type__iexact=product_type
-            ).first()
-
-            packaging_obj = models.ProductPackagingBy.objects.filter(
-                product_packaging__iexact=product_packaging
-            ).first()
-
-            country_obj = models.Country.objects.filter(
-                country_name__iexact=country_of_origin
-            ).first()
-
-            vendor_obj = models.VendorDetail.objects.filter(
-                email__iexact=vendor
-            ).first()
-
-            # -------- SKIP INVALID ROW -------- #
-            if not all([category_obj, subcategory_obj, product_type_obj, packaging_obj, country_obj, vendor_obj]):
+            # Skip if row has neither category nor product_name
+            if not category and not product_name:
                 continue
 
-            # -------- GENERATE PRODUCT CODE -------- #
-            random_number = str(random.randint(1000, 9999))
-            product_code = (
-                category_obj.category[:3].upper() + "_" +
-                subcategory_obj.subcategory[:3].upper() + "_" +
-                product_name[:3].upper() + "_" +
-                random_number
-            )
-
-            # -------- AVAILABLE COUNTRIES -------- #
-            list_available_country = []
-            for available in available_country:
-                obj = models.ProductCountry.objects.filter(
-                    Q(name__iexact=available) | Q(name_french__iexact=available)
+            try:
+                # -------- FETCH DATABASE OBJECTS -------- #
+                category_obj = models.CategoryDetail.objects.filter(
+                    Q(category__iexact=category) | Q(category_french__iexact=category)
                 ).first()
-                if obj:
-                    list_available_country.append(obj.id)
 
-            # -------- TAGS -------- #
-            list_tags = []
-            for tag in tags:
-                obj = models.ProductTag.objects.filter(
-                    category=category_obj.id,
-                    tag__iexact=tag
-                ).first()
-                if obj:
-                    list_tags.append(obj.id)
+                subcategory_obj = None
+                if category_obj:
+                    subcategory_obj = models.SubCategoryDetail.objects.filter(
+                        category=category_obj
+                    ).filter(
+                        Q(subcategory__iexact=subcategory) | Q(subcategory_french__iexact=subcategory)
+                    ).first()
 
-            # -------- CREATE PRODUCT -------- #
-            product = models.ProductDetail.objects.create(
-                product_name=product_name,
-                product_name_french=product_name,
-                product_code=product_code,
-                vendor_id=vendor_obj.id,
-                category_id=category_obj.id,
-                subcategory_id=subcategory_obj.id,
-                description=description,
-                description_french=description,
-                unit_of_measure=unit_of_measure,
-                length=length,
-                height=height,
-                width=width,
-                weight=weight,
-                country_of_origin_id=country_obj.id,
-                carton_length=length,
-                carton_width=width,
-                carton_height=height,
-                carton_weight=weight,
-                product_verification='Approved',
-                min_order_quantity=min_order_quantity,
-                price=price,
-                discount=0,
-                final_price=final_price,
-                status='bulk',
-                refpro=refpro,
-                reuser=reuser,
-                product_type_id=product_type_obj.id,
-                product_packaging_id=packaging_obj.id,
-                product_packaging_value=product_packaging_value,
-                shipping_via=shipping_via,
-            )
+                if not subcategory_obj:
+                    subcategory_obj = models.SubCategoryDetail.objects.filter(
+                        Q(subcategory__iexact=subcategory) | Q(subcategory_french__iexact=subcategory)
+                    ).first()
 
-            # -------- MANY TO MANY -------- #
-            if list_available_country:
-                product.available_country.set(list_available_country)
+                if not category_obj and subcategory_obj:
+                    category_obj = subcategory_obj.category
 
-            if list_tags:
-                product.tag.set(list_tags)
+                if not category_obj or not subcategory_obj:
+                    skipped_rows.append({
+                        "row": row_index,
+                        "product_name": product_name,
+                        "reason": f"Category '{category}' or Subcategory '{subcategory}' not found in database"
+                    })
+                    continue
 
-            # -------- MODEL -------- #
-            model_obj = models.ProductModel.objects.create(
-                product_id=product.id,
-                model_name=product_name,
-                model_name_french=product_name,
-                status='Active'
-            )
+                # Fetch vendor
+                vendor_obj = None
+                if vendor:
+                    vendor_obj = models.VendorDetail.objects.filter(
+                        Q(email__iexact=vendor) | Q(vendor_name__iexact=vendor)
+                    ).first()
 
-            # -------- VARIANT -------- #
-            variant = models.ProductModelVariant.objects.create(
-                product_id=product.id,
-                model_id=model_obj.id,
-                name=product_name,
-                name_french=product_name,
-                price=final_price,
-                variant_verification='Approved',
-                status='Active'
-            )
+                if not vendor_obj and last_vendor_obj:
+                    vendor_obj = last_vendor_obj
 
-            # -------- VENDOR PRICE -------- #
-            models.VendorProductPrice.objects.create(
-                product_id=product.id,
-                model_id=model_obj.id,
-                vendor_id=vendor_obj.id,
-                variant_id=variant.id,
-                price=price,
-                status='Active'
-            )
+                if not vendor_obj:
+                    vendor_obj = models.VendorDetail.objects.first()
+                else:
+                    last_vendor_obj = vendor_obj
 
-            # -------- UPDATE FINAL PRICE -------- #
-            product.price = final_price
-            product.save()
+                # Fetch ProductType
+                product_type_obj = None
+                if product_type:
+                    product_type_obj = models.ProductType.objects.filter(
+                        product_type__iexact=product_type
+                    ).first()
+                if not product_type_obj:
+                    product_type_obj = models.ProductType.objects.filter(
+                        product_type__iexact='Normal'
+                    ).first() or models.ProductType.objects.first()
+
+                # Fetch Packaging
+                packaging_obj = None
+                if product_packaging:
+                    packaging_obj = models.ProductPackagingBy.objects.filter(
+                        product_packaging__iexact=product_packaging
+                    ).first()
+                if not packaging_obj:
+                    packaging_obj = models.ProductPackagingBy.objects.filter(
+                        product_packaging__iexact='Carton'
+                    ).first() or models.ProductPackagingBy.objects.first()
+
+                # Fetch Country
+                country_obj = None
+                if country_of_origin:
+                    country_obj = models.Country.objects.filter(
+                        country_name__iexact=country_of_origin
+                    ).first()
+                if not country_obj:
+                    country_obj = models.Country.objects.filter(id=2).first() or models.Country.objects.first()
+
+                # -------- GENERATE PRODUCT CODE -------- #
+                random_number = str(random.randint(1000, 9999))
+                cat_code = (category_obj.category or category_obj.category_french or "CAT")[:3].upper()
+                sub_code = (subcategory_obj.subcategory or subcategory_obj.subcategory_french or "SUB")[:3].upper()
+                prod_code = (product_name or "PRO")[:3].upper()
+                product_code = f"{cat_code}_{sub_code}_{prod_code}_{random_number}"
+
+                # -------- AVAILABLE COUNTRIES -------- #
+                list_available_country = []
+                if not available_country or any(str(a).strip().lower() == 'all' for a in available_country):
+                    list_available_country = list(models.ProductCountry.objects.values_list('id', flat=True))
+                else:
+                    for available in available_country:
+                        c_obj = models.ProductCountry.objects.filter(
+                            Q(name__iexact=available) | Q(name_french__iexact=available)
+                        ).first()
+                        if c_obj:
+                            list_available_country.append(c_obj.id)
+                    if not list_available_country:
+                        list_available_country = list(models.ProductCountry.objects.values_list('id', flat=True))
+
+                # -------- TAGS -------- #
+                list_tags = []
+                for tag in tags:
+                    tag_obj = models.ProductTag.objects.filter(
+                        category=category_obj.id,
+                        tag__iexact=tag
+                    ).first()
+                    if not tag_obj:
+                        tag_obj, _ = models.ProductTag.objects.get_or_create(
+                            category=category_obj,
+                            tag=tag
+                        )
+                    if tag_obj:
+                        list_tags.append(tag_obj.id)
+
+                if shipping_via not in ['By Air', 'By Ship', 'Both']:
+                    shipping_via = 'By Air'
+
+                # -------- CREATE PRODUCT -------- #
+                product = models.ProductDetail.objects.create(
+                    product_name=product_name,
+                    product_name_french=product_name,
+                    product_code=product_code,
+                    vendor_id=vendor_obj.id if vendor_obj else None,
+                    category_id=category_obj.id,
+                    subcategory_id=subcategory_obj.id,
+                    description=description,
+                    description_french=description,
+                    unit_of_measure=unit_of_measure,
+                    length=length,
+                    height=height,
+                    width=width,
+                    weight=weight,
+                    country_of_origin_id=country_obj.id if country_obj else 2,
+                    carton_length=length,
+                    carton_width=width,
+                    carton_height=height,
+                    carton_weight=weight,
+                    product_verification='Approved',
+                    min_order_quantity=min_order_quantity,
+                    price=price,
+                    discount=0,
+                    final_price=final_price,
+                    status='bulk',
+                    product_added_from='bulk',
+                    refpro=refpro,
+                    reuser=reuser,
+                    product_type_id=product_type_obj.id if product_type_obj else None,
+                    product_packaging_id=packaging_obj.id if packaging_obj else None,
+                    product_packaging_value=product_packaging_value,
+                    shipping_via=shipping_via,
+                    is_deleted=False,
+                )
+
+                # -------- MANY TO MANY -------- #
+                if list_available_country:
+                    product.available_country.set(list_available_country)
+
+                if list_tags:
+                    product.tag.set(list_tags)
+
+                # -------- MODEL -------- #
+                model_obj = models.ProductModel.objects.create(
+                    product_id=product.id,
+                    model_name=product_name,
+                    model_name_french=product_name,
+                    status='Active',
+                )
+
+                # -------- VARIANT -------- #
+                variant = models.ProductModelVariant.objects.create(
+                    product_id=product.id,
+                    model_id=model_obj.id,
+                    name=product_name,
+                    name_french=product_name,
+                    price=final_price,
+                    variant_verification='Approved',
+                    status='Active',
+                )
+
+                # -------- VENDOR PRICE -------- #
+                if vendor_obj:
+                    models.VendorProductPrice.objects.create(
+                        product_id=product.id,
+                        model_id=model_obj.id,
+                        vendor_id=vendor_obj.id,
+                        variant_id=variant.id,
+                        price=price,
+                        status='Active',
+                    )
+
+                # -------- UPDATE FINAL PRICE -------- #
+                product.price = final_price
+                product.save()
+
+                created_count += 1
+
+            except Exception as row_error:
+                print(f"Error importing row {row_index} ({product_name}): {row_error}", flush=True)
+                skipped_rows.append({
+                    "row": row_index,
+                    "product_name": product_name,
+                    "reason": str(row_error)
+                })
+                continue
+
+        response_data = {
+            "statuscode": 200,
+            "status": "Success",
+            "message": f"Data submitted successfully. {created_count} products added.",
+            "created_count": created_count,
+            "skipped_count": len(skipped_rows),
+        }
+        if skipped_rows:
+            response_data["skipped_rows"] = skipped_rows
 
         return HttpResponse(
-            JSONRenderer().render({
-                "statuscode": 200,
-                "status": "Success",
-                "message": "Data submitted successfully"
-            }),
+            JSONRenderer().render(response_data),
             content_type='application/json'
         )
 

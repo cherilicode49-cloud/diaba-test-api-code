@@ -98,9 +98,9 @@ def calculate_shipping_cost(
         # print("chargeable_sea_weight * float(price_by_ship or 0====>",chargeable_sea_weight * float(price_by_ship or 0))
         # print("chargeable_express_weight * float(price_by_express or 0====>",chargeable_express_weight * float(price_by_express or 0))
 
-        total_air_cost = round(chargeable_air_weight * float(price_by_air or 0))
-        total_sea_cost = round(chargeable_sea_weight * float(price_by_ship or 0),4)
-        total_express_cost = round(chargeable_express_weight * float(price_by_express or 0),4)
+        total_air_cost = round(chargeable_air_weight * float(price_by_air or 0), 2)
+        total_sea_cost = round(chargeable_sea_weight * float(price_by_ship or 0), 2)
+        total_express_cost = round(chargeable_express_weight * float(price_by_express or 0), 2)
 
 
         # print("total_sea_cost------->",total_air_cost)

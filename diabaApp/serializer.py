@@ -8,6 +8,71 @@ from datetime import datetime
 import random, math
 from django.core.cache import cache
 
+def format_product_price(usd_price, country_name='Egypt', as_raw_number=False):
+    if usd_price is None or str(usd_price).strip() in ['None', '', 'null']:
+        return 0 if as_raw_number else '0'
+
+    try:
+        usd_val = float(usd_price)
+    except (ValueError, TypeError):
+        return 0 if as_raw_number else '0'
+
+    if usd_val < 0:
+        usd_val = 0.0
+
+    if not country_name or str(country_name).strip() in ['None', '', 'null']:
+        country_name = 'Egypt'
+
+    cache_key = f'country_rate_info_{country_name}'
+    rate_info = cache.get(cache_key)
+
+    if not rate_info:
+        try:
+            get_country = models.CountryWithCurrency.objects.filter(country_name=country_name).first()
+            if not get_country:
+                get_country = models.CountryWithCurrency.objects.filter(country_name='Egypt').first()
+
+            curr_code = get_country.currency_code if get_country else 'USD'
+            to_convert_us_currency = models.CurrencyConverter.objects.filter(currency_code='XOF').first()
+            xof_rate = float(to_convert_us_currency.system_rate) if to_convert_us_currency and to_convert_us_currency.system_rate else 589.0
+
+            target_rate = 1.0
+            if curr_code != 'USD':
+                target_curr = models.CurrencyConverter.objects.filter(currency_code=curr_code).first()
+                if target_curr and target_curr.system_rate:
+                    target_rate = float(target_curr.system_rate)
+
+            rate_info = {
+                'curr_code': curr_code,
+                'is_country_usd': (get_country.currency_code == 'USD') if get_country else True,
+                'xof_rate': xof_rate,
+                'target_rate': target_rate
+            }
+            cache.set(cache_key, rate_info, 3600)
+        except Exception:
+            rate_info = {
+                'curr_code': 'USD',
+                'is_country_usd': True,
+                'xof_rate': 589.0,
+                'target_rate': 1.0
+            }
+
+    curr_code = rate_info['curr_code']
+    if curr_code == 'USD' or rate_info['is_country_usd']:
+        usd_rounded = round(usd_val, 2)
+        if as_raw_number:
+            return usd_rounded
+        return f"{usd_rounded:,.2f}".replace(",", " ")
+    elif curr_code == 'XOF':
+        value = math.ceil(usd_val * rate_info['xof_rate'])
+    else:
+        value = math.ceil(usd_val * rate_info['target_rate'])
+
+    if as_raw_number:
+        return value
+    return f'{value:,}'.replace(',', ' ')
+
+
 
 
 
@@ -152,6 +217,7 @@ class ProductDetailAppSerializer(serializers.ModelSerializer):
     
     currency = serializers.SerializerMethodField()
     price = serializers.SerializerMethodField()
+    final_price = serializers.SerializerMethodField()
 
     dollar = serializers.SerializerMethodField()
     xaf = serializers.SerializerMethodField()
@@ -203,6 +269,22 @@ class ProductDetailAppSerializer(serializers.ModelSerializer):
 
 
     def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        return format_product_price(obj.price, country, as_raw_number=False)
+
+    def get_final_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        try:
+            discount_val = float(obj.discount or 0)
+        except (ValueError, TypeError):
+            discount_val = 0.0
+        if discount_val > 0:
+            calc_final = float(obj.price or 0) * (1.0 - (discount_val / 100.0))
+        else:
+            calc_final = float(obj.price or 0)
+        return format_product_price(calc_final, country, as_raw_number=False)
+
+    def _unused_get_price_old(self, obj):
         country = self.context.get('country','Egypt')
         if not models.CountryWithCurrency.objects.filter(country_name = country).exists():
             country = 'Egypt'
@@ -408,11 +490,10 @@ class ProductDetailAppSerializer(serializers.ModelSerializer):
                         price_by_ship = float(currency_country.price_by_ship)
                         price_by_express = float(currency_country.express_shipping)
                 
-                print(price_by_express, 'dddddd')
                 return {
-                    'price_by_air' : round(int(price_by_air), 2),
-                    'price_by_ship' : round(int(price_by_ship), 2),
-                    'price_by_express' : round(int(price_by_express), 2)
+                    'price_by_air' : round(float(price_by_air or 0), 2),
+                    'price_by_ship' : round(float(price_by_ship or 0), 2),
+                    'price_by_express' : round(float(price_by_express or 0), 2)
                 }
         else:
             # print("HERE--------7")
@@ -479,6 +560,22 @@ class ProductModelVariantSerializer(serializers.ModelSerializer):
 
 
     def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        return format_product_price(obj.price, country, as_raw_number=False)
+
+    def get_final_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        try:
+            discount_val = float(obj.discount or 0)
+        except (ValueError, TypeError):
+            discount_val = 0.0
+        if discount_val > 0:
+            calc_final = float(obj.price or 0) * (1.0 - (discount_val / 100.0))
+        else:
+            calc_final = float(obj.price or 0)
+        return format_product_price(calc_final, country, as_raw_number=False)
+
+    def _unused_variant_get_price_old(self, obj):
         country = self.context.get('country','Egypt')
         if not models.CountryWithCurrency.objects.filter(country_name = country).exists():
             country = 'Egypt'
@@ -694,6 +791,22 @@ class ProductSearchSerializer(serializers.ModelSerializer):
         return "$"
 
     def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        return format_product_price(obj.price, country, as_raw_number=False)
+
+    def get_final_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        try:
+            discount_val = float(obj.discount or 0)
+        except (ValueError, TypeError):
+            discount_val = 0.0
+        if discount_val > 0:
+            calc_final = float(obj.price or 0) * (1.0 - (discount_val / 100.0))
+        else:
+            calc_final = float(obj.price or 0)
+        return format_product_price(calc_final, country, as_raw_number=False)
+
+    def _unused_search_get_price_old(self, obj):
 
         country = self.context.get(
             'country',
@@ -837,6 +950,22 @@ class ProductDataSerializer(serializers.ModelSerializer):
         return symbol
 
     def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        return format_product_price(obj.price, country, as_raw_number=False)
+
+    def get_final_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        try:
+            discount_val = float(obj.discount or 0)
+        except (ValueError, TypeError):
+            discount_val = 0.0
+        if discount_val > 0:
+            calc_final = float(obj.price or 0) * (1.0 - (discount_val / 100.0))
+        else:
+            calc_final = float(obj.price or 0)
+        return format_product_price(calc_final, country, as_raw_number=False)
+
+    def _unused_data_get_price_old(self, obj):
         country = self.context.get('country', 'Egypt')
         if not country or country in ['null', 'None']:
             country = 'Egypt'
@@ -1086,6 +1215,11 @@ class CartDetailSerializer(serializers.ModelSerializer):
 
 
     def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        variant_price = obj.variant.price if (obj.variant and obj.variant.price) else 0
+        return format_product_price(variant_price, country, as_raw_number=True)
+
+    def _unused_cart_get_price_old(self, obj):
         country = self.context.get('country','Egypt')
         # print("country=-first __get_price=-==-->",country)
         if not models.CountryWithCurrency.objects.filter(country_name = country).exists():
@@ -1356,9 +1490,19 @@ class ProductOrderDetailSerializer(serializers.ModelSerializer):
     product_name = serializers.ReadOnlyField(source='product.product_name')
     model_name = serializers.ReadOnlyField(source='variant.model.model_name')
     warehouse_name = serializers.ReadOnlyField(source='warehouse.name')
-    product_cfa_price = serializers.ReadOnlyField(source='variant.price')
+    product_cfa_price = serializers.SerializerMethodField()
 
     variant_image = serializers.SerializerMethodField()
+
+    def get_product_cfa_price(self, obj):
+        try:
+            if obj.variant and obj.variant.price:
+                xof = models.CurrencyConverter.objects.filter(currency_code='XOF').first()
+                rate = float(xof.system_rate) if (xof and xof.system_rate) else 589.0
+                return math.ceil(float(obj.variant.price) * rate)
+        except Exception:
+            pass
+        return 0
 
     def get_variant_image(self, obj):
         image = getattr(obj.variant, 'image', None)
@@ -1426,18 +1570,35 @@ class VendorOrderDetailSerializer(serializers.ModelSerializer):
 
 
 class VendorOrderDataSerializer(serializers.ModelSerializer):
-    product_cfa_price = serializers.ReadOnlyField(source = 'variant.variant.price')
+    product_cfa_price = serializers.SerializerMethodField()
     vendor_cfa_price = serializers.SerializerMethodField()
 
     class Meta:
         model = models.VendorOrderDetail
         fields = '__all__'
 
+    def get_product_cfa_price(self, obj):
+        try:
+            if obj.variant and obj.variant.variant and obj.variant.variant.price:
+                xof = models.CurrencyConverter.objects.filter(currency_code='XOF').first()
+                rate = float(xof.system_rate) if (xof and xof.system_rate) else 589.0
+                return math.ceil(float(obj.variant.variant.price) * rate)
+        except Exception:
+            pass
+        return 0
+
     def get_vendor_cfa_price(self, obj):
         try:
-            return models.VendorProductPrice.objects.filter(vendor = obj.vendor.id , variant = obj.variant.variant.id).first().price
-        except:
-            return models.VendorProductPrice.objects.filter(variant = obj.variant.variant.id).first().price
+            xof = models.CurrencyConverter.objects.filter(currency_code='XOF').first()
+            rate = float(xof.system_rate) if (xof and xof.system_rate) else 589.0
+            vp = models.VendorProductPrice.objects.filter(vendor=obj.vendor.id, variant=obj.variant.variant.id).first()
+            if not vp:
+                vp = models.VendorProductPrice.objects.filter(variant=obj.variant.variant.id).first()
+            if vp and vp.price:
+                return math.ceil(float(vp.price) * rate)
+        except Exception:
+            pass
+        return 0
 
     def to_representation(self, instance):
         self.fields['vendor'] =  VendorDataSerializer(read_only=True)
@@ -1784,6 +1945,22 @@ class ProductDetailCheckSerializer(serializers.ModelSerializer):
 
 
     def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        return format_product_price(obj.price, country, as_raw_number=False)
+
+    def get_final_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        try:
+            discount_val = float(obj.discount or 0)
+        except (ValueError, TypeError):
+            discount_val = 0.0
+        if discount_val > 0:
+            calc_final = float(obj.price or 0) * (1.0 - (discount_val / 100.0))
+        else:
+            calc_final = float(obj.price or 0)
+        return format_product_price(calc_final, country, as_raw_number=False)
+
+    def _unused_check_get_price_old(self, obj):
         country = self.context.get('country','Egypt')
         if not models.CountryWithCurrency.objects.filter(country_name = country).exists():
             country = 'Egypt'
@@ -1869,6 +2046,11 @@ class RecentlyViewProductSerializer(serializers.ModelSerializer):
 
 
     def get_price(self, obj):
+        country = self.context.get('country', 'Egypt')
+        product_price = obj.product.price if (obj.product and obj.product.price) else 0
+        return format_product_price(product_price, country, as_raw_number=False)
+
+    def _unused_recent_get_price_old(self, obj):
         country = self.context.get('country','Egypt')
         if not models.CountryWithCurrency.objects.filter(country_name = country).exists():
             country = 'Egypt'

@@ -34,6 +34,7 @@ from diabaApp.apis.wishlist_views import *
 from diabaApp.apis.banner_views import *
 from diabaApp.apis.container_views import *
 from diabaApp.apis.activity_views import *
+from diabaApp.apis.third_party_product_views import fetch_third_party_products, compare_product_flow, import_yuwi_go_products, sync_third_party_products
 
 urlpatterns = [
 
@@ -405,6 +406,12 @@ urlpatterns = [
     
 
     path('api/product_value_update_test/',product_value_update_test, name='product_value_update_test'), #done
+    path('api/test_external_product_api/',test_external_product_api, name='test_external_product_api'), #done
+    path('api/check_product_data_fields/',check_product_data_fields, name='check_product_data_fields'), #done
+    path('api/fetch_third_party_products/',fetch_third_party_products, name='fetch_third_party_products'),
+    path('api/compare_product_flow/',compare_product_flow, name='compare_product_flow'),
+    path('api/import_yuwi_go_products/',import_yuwi_go_products, name='import_yuwi_go_products'),
+    path('api/sync_third_party_products/',sync_third_party_products, name='sync_third_party_products'),
     path('api/all_product_country/',all_product_country, name='all_product_country'), #done
     path('api/product_country_update/',product_country_update, name='product_country_update'), #done
 

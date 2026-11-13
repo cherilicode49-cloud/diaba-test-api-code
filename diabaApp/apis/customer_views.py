@@ -336,7 +336,8 @@ def calculate_shipping_cost(
         quantity,
         price_by_air,
         price_by_ship,
-        price_by_express
+        price_by_express,
+        is_usd=None
     ):
 
         # print("price_by_ship----->",price_by_ship)
@@ -395,20 +396,25 @@ def calculate_shipping_cost(
         # print("chargeable_sea_weight * float(price_by_ship or 0====>",chargeable_sea_weight * float(price_by_ship or 0))
         # print("chargeable_express_weight * float(price_by_express or 0====>",chargeable_express_weight * float(price_by_express or 0))
 
-        total_air_cost = round(chargeable_air_weight * float(price_by_air or 0))
-        total_sea_cost = round(chargeable_sea_weight * float(price_by_ship or 0),4)
-        total_express_cost = round(chargeable_express_weight * float(price_by_express or 0),4)
+        total_air_cost = round(chargeable_air_weight * float(price_by_air or 0), 2)
+        total_sea_cost = round(chargeable_sea_weight * float(price_by_ship or 0), 2)
+        total_express_cost = round(chargeable_express_weight * float(price_by_express or 0), 2)
 
-
-        # print("total_sea_cost------->",total_air_cost)
-
+        if is_usd is None:
+            is_usd = (price_by_air and float(price_by_air) < 500) or (price_by_ship and float(price_by_ship) < 500) or (price_by_express and float(price_by_express) < 500)
+        fmt_air = f"{total_air_cost:,.2f}".replace(',', ' ') if is_usd else f"{round(total_air_cost):,}".replace(',', ' ')
+        fmt_sea = f"{total_sea_cost:,.2f}".replace(',', ' ') if is_usd else f"{round(total_sea_cost):,}".replace(',', ' ')
+        fmt_exp = f"{total_express_cost:,.2f}".replace(',', ' ') if is_usd else f"{round(total_express_cost):,}".replace(',', ' ')
         return {
-            "cbm": math.ceil(round(total_cbm, 6)),
-            "chargeable_air_weight": round(chargeable_air_weight),
+            "cbm": round(total_cbm, 6),
+            "chargeable_air_weight": round(chargeable_air_weight, 2),
             "chargeable_sea_weight": round(chargeable_sea_weight, 6),
-            "total_air_cost": total_air_cost,
-            "total_sea_cost": total_sea_cost,
-            "total_express_cost":total_express_cost
+            "total_air_cost": total_air_cost if is_usd else round(total_air_cost),
+            "total_sea_cost": total_sea_cost if is_usd else round(total_sea_cost),
+            "total_express_cost": total_express_cost if is_usd else round(total_express_cost),
+            "total_air_cost_view": fmt_air,
+            "total_sea_cost_view": fmt_sea,
+            "total_express_cost_view": fmt_exp,
         }
 
 
@@ -477,6 +483,14 @@ def customer_wishlist_cart_list(request):
             country = 'Egypt'
             
 
+        # Determine early if this is a USD cart (used throughout)
+        if currencyCode in ['XOF', 'XAF', 'CDF', 'GNF']:
+            is_usd_cart = False
+        elif currencyCode == 'USD':
+            is_usd_cart = True
+        else:
+            is_usd_cart = (country in ['Egypt', 'Libya', 'Liberia', 'Lesotho', 'Zambia', 'Kenya', 'Zimbabwe', 'Ghana', 'Uganda', 'The Gambia', 'Tunisia', 'Ethiopia', 'Tanzania', 'Swaziland', 'Eritrea', 'Djibouti', 'Sudan', 'South Sudan', 'Comoros', 'South Africa', 'Somalia', 'Cape Verde', 'Burundi', 'Sierra Leone', 'Botswana', 'Seychelles', 'Nigeria', 'Angola', 'Sao Tome and Principe', 'Namibia', 'Algeria', 'Mozambique', 'Morocco', 'Mauritius', 'Mauritania', 'Malawi', 'Madagascar', 'Libya', 'Liberia'])
+
         if check_customer == 1:
             user = models.CustomerDetail.objects.get(id = customer)
             
@@ -484,8 +498,31 @@ def customer_wishlist_cart_list(request):
                 wishlist_data = models.WishlistDetail.objects.filter(customer= customer)
                 wishlist_serializer = WishlistDetailSerializer(wishlist_data, many=True).data
 
+                # Calculate tracking_amount for wishlist
+                active_currency = str(currencyCode).upper().strip() if currencyCode not in [None, '', 'null'] else 'XOF'
+                xof_conv = models.CurrencyConverter.objects.filter(currency_code="XOF").first()
+                xof_rate = float(xof_conv.system_rate) if xof_conv and xof_conv.system_rate else 589.0
+                if active_currency == "XOF":
+                    tracking_amount = 1000
+                else:
+                    usd_tracking = 1000.0 / xof_rate
+                    if active_currency == "USD":
+                        tracking_amount = round(usd_tracking, 2)
+                    else:
+                        target_conv = models.CurrencyConverter.objects.filter(currency_code=active_currency).first()
+                        target_rate = float(target_conv.system_rate) if target_conv and target_conv.system_rate else None
+                        if target_rate:
+                            converted_tracking = usd_tracking * target_rate
+                            tracking_amount = round(converted_tracking, 2) if is_usd_cart else round(converted_tracking)
+                        else:
+                            tracking_amount = round(usd_tracking, 2) if is_usd_cart else 1000
+
+                view_fmt_wl = (lambda v: f"{float(v):,.2f}".replace(",", " ")) if is_usd_cart else (lambda v: f"{round(float(v)):,}".replace(",", " "))
+
                 res={
-                    'data':wishlist_serializer
+                    'data':wishlist_serializer,
+                    'tracking_amount': tracking_amount,
+                    'tracking_amount_view': view_fmt_wl(tracking_amount)
                 }
                 return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
             
@@ -512,17 +549,14 @@ def customer_wishlist_cart_list(request):
                         per_product_cart_serializer = CartDetailSerializer(product,context = {'country':country}).data
                         quantity=product.quantity
                         product_total = float(quantity) * float(per_product_cart_serializer.get('price'))
-                        per_product_cart_serializer['product_total'] = int(round(float(product_total)))
+                        per_product_cart_serializer['product_total'] = round(float(product_total), 2) if is_usd_cart else round(float(product_total))
                         
                         cart_data_list.append(per_product_cart_serializer)
 
                     res={
                         'data':cart_data_list,
-                        # 'data':cart_serializer,
-                        # 'daily_price':daily_price,
-                        # 'product_total':product_total,
-                        # 'price_by_air':price_by_air,
-                        # 'price_by_ship':price_by_ship
+                        'tracking_amount': 1000 if not is_usd_cart else 1.7,
+                        'tracking_amount_view': "1 000" if not is_usd_cart else "1.70",
                         'message_en':'Currently not serve in your region',
                         'message_fr':'Actuellement non desservi dans votre region'
                     }                    
@@ -564,33 +598,27 @@ def customer_wishlist_cart_list(request):
 
                         if currencyCode not in [None,'','null']:
                             if price_by.currency_code != "USD":
-                                non_usd_rate = models.CurrencyConverter.objects.get(currency_code = price_by.currency_code).system_rate
-                                usd_price_by_air = float(price_by_air_rate) / float(non_usd_rate)
+                                non_usd_obj = models.CurrencyConverter.objects.filter(currency_code = price_by.currency_code).first()
+                                non_usd_rate = float(non_usd_obj.system_rate) if non_usd_obj else 589.0
+                                usd_price_by_air = float(price_by_air_rate) / non_usd_rate
 
                                 if currencyCode != "USD":
-                                    user_country_currency_rate = models.CurrencyConverter.objects.get(currency_code = price_by.currency_code).system_rate
-                                    price_by_air = float(usd_price_by_air) * float(user_country_currency_rate)
-
+                                    target_curr_obj = models.CurrencyConverter.objects.filter(currency_code = currencyCode).first()
+                                    target_rate = float(target_curr_obj.system_rate) if target_curr_obj else 1.0
+                                    price_by_air = float(usd_price_by_air) * target_rate
                                 else:
                                     price_by_air = usd_price_by_air
-                                    
                             else:
                                 if currencyCode != "USD":
-                                    selected_currency_rate = models.CurrencyConverter.objects.get(currency_code = currencyCode).system_rate
-
-                                    price_by_air = float(price_by_air_rate) * float(selected_currency_rate)
-
+                                    target_curr_obj = models.CurrencyConverter.objects.filter(currency_code = currencyCode).first()
+                                    target_rate = float(target_curr_obj.system_rate) if target_curr_obj else 1.0
+                                    price_by_air = float(price_by_air_rate) * target_rate
                                 else:
                                     price_by_air = price_by_air_rate
-                                    # print(price_by_air, 'price_by_air')
-
                         else:
                             price_by_air = price_by_air_rate
-                            # print(price_by_air, 'price_by_air tyu' )
 
-                        
-                        # print(price_by_air,'price_by_air_rate')
-                        per_product_cart_serializer['price_by_air']= round(float(price_by_air),2)
+                        per_product_cart_serializer['price_by_air'] = round(float(price_by_air), 2) if is_usd_cart else round(float(price_by_air))
                         # list_air.append(price_by_air)
 
 
@@ -603,36 +631,27 @@ def customer_wishlist_cart_list(request):
                         
                         if currencyCode not in [None,'','null']:
                             if price_by.currency_code != "USD":
-                                non_usd_rate = models.CurrencyConverter.objects.get(currency_code = price_by.currency_code).system_rate
-                                usd_price_by_ship = float(price_by_ship_rate) / float(non_usd_rate)
-                                # print(price_by_ship_rate,"----usd_price_by_ship--->",usd_price_by_ship)
+                                non_usd_obj = models.CurrencyConverter.objects.filter(currency_code = price_by.currency_code).first()
+                                non_usd_rate = float(non_usd_obj.system_rate) if non_usd_obj else 589.0
+                                usd_price_by_ship = float(price_by_ship_rate) / non_usd_rate
 
                                 if currencyCode != "USD":
-                                    user_country_currency_rate = models.CurrencyConverter.objects.get(currency_code = price_by.currency_code).system_rate
-                                    price_by_ship = float(usd_price_by_ship) * float(user_country_currency_rate)
-                                    # print("DATA from here---->1")
-
+                                    target_curr_obj = models.CurrencyConverter.objects.filter(currency_code = currencyCode).first()
+                                    target_rate = float(target_curr_obj.system_rate) if target_curr_obj else 1.0
+                                    price_by_ship = float(usd_price_by_ship) * target_rate
                                 else:
                                     price_by_ship = usd_price_by_ship
-                                    # print("DATA from here---->2")
-                                    
                             else:
                                 if currencyCode != "USD":
-                                    selected_currency_rate = models.CurrencyConverter.objects.get(currency_code = currencyCode).system_rate
-
-                                    price_by_ship = float(price_by_ship_rate) * float(selected_currency_rate)
-                                    # print("DATA from here---->3")
-
+                                    target_curr_obj = models.CurrencyConverter.objects.filter(currency_code = currencyCode).first()
+                                    target_rate = float(target_curr_obj.system_rate) if target_curr_obj else 1.0
+                                    price_by_ship = float(price_by_ship_rate) * target_rate
                                 else:
                                     price_by_ship = price_by_ship_rate
-                                    # print("DATA from here---->4")
-
                         else:
                             price_by_ship = price_by_ship_rate
-                            # print("DATA from here---->5")
 
-                        # print(price_by_ship, 'price_by_ship_rateprice_by_ship_rateprice_by_ship_rate')
-                        per_product_cart_serializer['price_by_ship'] = round(float(price_by_ship),2)
+                        per_product_cart_serializer['price_by_ship'] = round(float(price_by_ship), 2) if is_usd_cart else round(float(price_by_ship))
                         # list_ship.append(price_by_ship)
                     if product.shipping_via == "By Express":
                         
@@ -640,33 +659,27 @@ def customer_wishlist_cart_list(request):
 
                         if currencyCode not in [None,'','null']:
                             if price_by.currency_code != "USD":
-                                non_usd_rate = models.CurrencyConverter.objects.get(currency_code = price_by.currency_code).system_rate
-                                usd_price_by_express = float(price_by_express_shipping) / float(non_usd_rate)
+                                non_usd_obj = models.CurrencyConverter.objects.filter(currency_code = price_by.currency_code).first()
+                                non_usd_rate = float(non_usd_obj.system_rate) if non_usd_obj else 589.0
+                                usd_price_by_express = float(price_by_express_shipping) / non_usd_rate
 
                                 if currencyCode != "USD":
-                                    user_country_currency_rate = models.CurrencyConverter.objects.get(currency_code = price_by.currency_code).system_rate
-                                    price_by_express = float(usd_price_by_express) * float(user_country_currency_rate)
-
+                                    target_curr_obj = models.CurrencyConverter.objects.filter(currency_code = currencyCode).first()
+                                    target_rate = float(target_curr_obj.system_rate) if target_curr_obj else 1.0
+                                    price_by_express = float(usd_price_by_express) * target_rate
                                 else:
                                     price_by_express = usd_price_by_express
-                                    
                             else:
                                 if currencyCode != "USD":
-                                    selected_currency_rate = models.CurrencyConverter.objects.get(currency_code = currencyCode).system_rate
-
-                                    price_by_express = float(price_by_express_shipping) * float(selected_currency_rate)
-
+                                    target_curr_obj = models.CurrencyConverter.objects.filter(currency_code = currencyCode).first()
+                                    target_rate = float(target_curr_obj.system_rate) if target_curr_obj else 1.0
+                                    price_by_express = float(price_by_express_shipping) * target_rate
                                 else:
                                     price_by_express = price_by_express_shipping
-                                    # print(price_by_air, 'price_by_air')
-
                         else:
                             price_by_express = price_by_express_shipping
-                            # print(price_by_air, 'price_by_air tyu' )
 
-                        
-                        # print(price_by_air,'price_by_air_rate')
-                        per_product_cart_serializer['price_by_express']= round(float(price_by_express),2)
+                        per_product_cart_serializer['price_by_express'] = round(float(price_by_express), 2) if is_usd_cart else round(float(price_by_express))
                     # print(price_by_express, 'price_by_expresspricvv afaf  product', product.product.carton_length, 'carton')
                     carton_length=product.product.carton_length
                     carton_width=product.product.carton_width
@@ -681,7 +694,7 @@ def customer_wishlist_cart_list(request):
                     # print("quantity----->",quantity)
                     # print("price_by_air----->",price_by_air)
                     # print("price_by_ship----->",price_by_ship)
-                    shipping_cost_per_product = calculate_shipping_cost(carton_length,carton_width,carton_height,carton_weight,quantity,price_by_air,price_by_ship, price_by_express)
+                    shipping_cost_per_product = calculate_shipping_cost(carton_length,carton_width,carton_height,carton_weight,quantity,price_by_air,price_by_ship, price_by_express, is_usd=is_usd_cart)
                     # print(shipping_cost_per_product, 'shipping_cost_per_product')
                     list_air.append(shipping_cost_per_product.get('total_air_cost'))
                     list_ship.append(shipping_cost_per_product.get('total_sea_cost'))
@@ -691,69 +704,107 @@ def customer_wishlist_cart_list(request):
                     list_product_amount.append(product_total)
                     
                     per_product_cart_serializer['shipping_cost_per_product'] = shipping_cost_per_product
-                    per_product_cart_serializer['product_total'] = int(round(float(product_total)))
+                    per_product_cart_serializer['product_total'] = round(float(product_total), 2) if is_usd_cart else round(float(product_total))
 
                     cart_data_list.append(per_product_cart_serializer)
                 
-                total_price = math.ceil(sum(list_product_amount))
-                total_air = math.ceil(sum(list_air))
-                total_ship = math.ceil(sum(list_ship))
-                total_express = math.ceil(sum(list_express))
+                is_usd_cart = (currencyCode == 'USD') or (currencyCode not in ['XOF', 'XAF', 'CDF', 'GNF'] and ((country == 'Egypt') or (price_by and getattr(price_by, 'currency_code', None) == 'USD') or (not price_by and country not in ['XOF', 'XAF', 'CDF', 'GNF'])))
+                if is_usd_cart:
+                    total_price = round(sum(list_product_amount), 2)
+                    total_air = round(sum(list_air), 2)
+                    total_ship = round(sum(list_ship), 2)
+                    total_express = round(sum(list_express), 2)
+                else:
+                    total_price = round(sum(list_product_amount))
+                    total_air = round(sum(list_air))
+                    total_ship = round(sum(list_ship))
+                    total_express = round(sum(list_express))
 
-                # print(total_price, total_air, total_ship)
+                # Calculate tracking_amount: fixed 1000 in XOF, converted accordingly for other currencies
+                active_currency = str(currencyCode).upper().strip() if currencyCode not in [None, '', 'null'] else (getattr(price_by, 'currency_code', None) or ('USD' if is_usd_cart else 'XOF')).upper().strip()
+
+                xof_conv = models.CurrencyConverter.objects.filter(currency_code="XOF").first()
+                xof_rate = float(xof_conv.system_rate) if xof_conv and xof_conv.system_rate else 589.0
+
+                if active_currency == "XOF":
+                    tracking_amount = 1000
+                else:
+                    usd_tracking = 1000.0 / xof_rate
+                    if active_currency == "USD":
+                        tracking_amount = round(usd_tracking, 2)
+                    else:
+                        target_conv = models.CurrencyConverter.objects.filter(currency_code=active_currency).first()
+                        target_rate = float(target_conv.system_rate) if target_conv and target_conv.system_rate else None
+                        if target_rate:
+                            converted_tracking = usd_tracking * target_rate
+                            tracking_amount = round(converted_tracking, 2) if is_usd_cart else round(converted_tracking)
+                        else:
+                            tracking_amount = round(usd_tracking, 2) if is_usd_cart else 1000
+
                 if promocode:
                     check_promocode = models.PromocodeDetail.objects.filter(promocode = promocode).count()
                     if check_promocode == 1:
                         get_promocode = models.PromocodeDetail.objects.get(promocode = promocode)
                         discount = get_promocode.discount
-                        # print(discount, 'discount')
-                        discount_price = round(int(total_price) * int(discount)/100)
-                        # print(total_price, 'total_price')
-                        price_after_discount = math.ceil(total_price - discount_price)
+                        if is_usd_cart:
+                            discount_price = round(float(total_price) * float(discount) / 100, 2)
+                            price_after_discount = round(total_price - discount_price, 2)
+                            amount_to_paid = round(price_after_discount + total_air + total_ship + total_express, 2)
+                            amount_to_paid_with_tax = round(amount_to_paid * 1.025, 2)
+                            view_fmt = lambda v: f"{float(v):,.2f}".replace(",", " ")
+                        else:
+                            discount_price = round(float(total_price) * float(discount) / 100)
+                            price_after_discount = round(float(total_price) - float(discount_price))
+                            amount_to_paid = round(float(price_after_discount) + float(total_air) + float(total_ship) + float(total_express))
+                            amount_to_paid_with_tax = round(float(amount_to_paid) * 1.025)
+                            view_fmt = lambda v: f"{round(float(v)):,}".replace(",", " ")
 
-
-                        amount_to_paid = math.ceil(price_after_discount + total_air + total_ship + total_express)
-                        amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.025)
-                        # print(amount_to_paid_with_tax, 'amount_to_paid_with_tax')
-                        
                         res={
                             'data':cart_data_list,
-                            'total_price' :f"{total_price:,}".replace(",", " "),
-                            'discount_price':f"{discount_price:,}".replace(",", " "), 
-                            'discount_percentage': discount, 
-                            'price_after_discount': f"{price_after_discount:,}".replace(",", " "),
-                            'total_air' :  f"{total_air:,}".replace(",", " "),
-                            'total_ship' :  f"{total_ship:,}".replace(",", " "),
-                            'total_express' :  f"{total_express:,}".replace(",", " "),
-                            'amount_to_paid_view': f"{amount_to_paid:,}".replace(",", " "),
-                            'amount_to_paid_with_tax_view': f"{amount_to_paid_with_tax:,}".replace(",", " "),
+                            'total_price': view_fmt(total_price),
+                            'discount_price': view_fmt(discount_price),
+                            'discount_percentage': discount,
+                            'price_after_discount': view_fmt(price_after_discount),
+                            'total_air': view_fmt(total_air),
+                            'total_ship': view_fmt(total_ship),
+                            'total_express': view_fmt(total_express),
+                            'tracking_amount': tracking_amount,
+                            'tracking_amount_view': view_fmt(tracking_amount),
+                            'amount_to_paid_view': view_fmt(amount_to_paid),
+                            'amount_to_paid_with_tax_view': view_fmt(amount_to_paid_with_tax),
                             'amount_to_paid': amount_to_paid,
                             'amount_to_paid_with_tax': amount_to_paid_with_tax,
                             'coupon_verify':True
-                            }
+                        }
                     else:
                         res={
                             'message':'Enter valid coupon.'
                         }
                         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=406)
                 else:
-                    amount_to_paid = math.ceil(total_price + total_air + total_ship + total_express)
-                    amount_to_paid_with_tax = math.ceil(amount_to_paid * 1.025)
-                    # print(amount_to_paid_with_tax, 'amount_to_paid_with_tax')
-                    
+                    if is_usd_cart:
+                        amount_to_paid = round(total_price + total_air + total_ship + total_express, 2)
+                        amount_to_paid_with_tax = round(amount_to_paid * 1.025, 2)
+                        view_fmt = lambda v: f"{float(v):,.2f}".replace(",", " ")
+                    else:
+                        amount_to_paid = round(float(total_price) + float(total_air) + float(total_ship) + float(total_express))
+                        amount_to_paid_with_tax = round(float(amount_to_paid) * 1.025)
+                        view_fmt = lambda v: f"{round(float(v)):,}".replace(",", " ")
+                    print(tracking_amount, 'tracking_amount')
                     res={
                         'data':cart_data_list,
-                        'total_price' :  f"{total_price:,}".replace(",", " "),
-                        'total_air' :  f"{total_air:,}".replace(",", " "),
-                        'total_ship' :  f"{total_ship:,}".replace(",", " "),
-                        'total_express': f"{total_express:,}".replace(",", " "),
-                        'amount_to_paid_view': f"{amount_to_paid:,}".replace(",", " "),
-                        'amount_to_paid_with_tax_view': f"{amount_to_paid_with_tax:,}".replace(",", " "),
+                        'total_price': view_fmt(total_price),
+                        'total_air': view_fmt(total_air),
+                        'total_ship': view_fmt(total_ship),
+                        'total_express': view_fmt(total_express),
+                        'tracking_amount': tracking_amount,
+                        'tracking_amount_view': view_fmt(tracking_amount),
+                        'amount_to_paid_view': view_fmt(amount_to_paid),
+                        'amount_to_paid_with_tax_view': view_fmt(amount_to_paid_with_tax),
                         'amount_to_paid_with_tax': amount_to_paid_with_tax,
                         'amount_to_paid': amount_to_paid,
                         'coupon_verify':False
-
-                        }
+                    }
                 
                 return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
             
