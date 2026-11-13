@@ -650,4 +650,55 @@ def google_transalate(request):
     json_data = JSONRenderer().render(res)
     return HttpResponse(json_data, content_type= 'application/json', status=200)
 
+
+from django.core.management import call_command
+
+@csrf_exempt
+def convert_base_price_to_usd_api(request):
+    try:
+        dry_run = False
+        reverse = False
+        custom_rate = None
+
+        if request.method == 'POST':
+            if request.body:
+                stream = io.BytesIO(request.body)
+                python_data = JSONParser().parse(stream)
+                dry_run = python_data.get('dry_run', False)
+                reverse = python_data.get('reverse', False)
+                custom_rate = python_data.get('rate', None)
+                only_final_price = python_data.get('only_final_price', False)
+        else:
+            dry_run = request.GET.get('dry_run', 'false').lower() == 'true'
+            reverse = request.GET.get('reverse', 'false').lower() == 'true'
+            custom_rate = request.GET.get('rate', None)
+            only_final_price = request.GET.get('only_final_price', 'false').lower() == 'true'
+
+        out = io.StringIO()
+        kwargs = {'stdout': out, 'stderr': out}
+        if dry_run:
+            kwargs['dry_run'] = True
+        if reverse:
+            kwargs['reverse'] = True
+        if custom_rate:
+            kwargs['rate'] = float(custom_rate)
+        if only_final_price:
+            kwargs['only_final_price'] = True
+
+        call_command('convert_base_price_to_usd', **kwargs)
+
+        res = {
+            'status': True,
+            'message': 'Base price conversion completed successfully.',
+            'log': out.getvalue()
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+    except Exception as e:
+        res = {
+            'status': False,
+            'message': str(e)
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=500)
+
+
     

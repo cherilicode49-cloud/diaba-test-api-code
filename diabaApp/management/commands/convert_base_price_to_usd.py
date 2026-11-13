@@ -24,11 +24,55 @@ class Command(BaseCommand):
             default=None,
             help='Custom XOF rate to use. Defaults to CurrencyConverter system_rate for XOF.'
         )
+        parser.add_argument(
+            '--only-final-price',
+            action='store_true',
+            help='Only sync final_price from already-converted price in ProductDetail (does not re-convert price, variants, or vendor prices).'
+        )
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
         reverse = options['reverse']
         custom_rate = options['rate']
+        only_final_price = options.get('only_final_price', False)
+
+        # ----------------------------------------------------
+        # SAFETY MODE: Only update ProductDetail.final_price
+        # ----------------------------------------------------
+        if only_final_price:
+            self.stdout.write(self.style.NOTICE("=== Starting ONLY final_price Sync (Safety Mode) ==="))
+            self.stdout.write("Notice: ProductDetail.price, ProductModelVariant, and VendorProductPrice will NOT be modified.\n")
+
+            products = list(models.ProductDetail.objects.all().only('id', 'product_name', 'price', 'final_price'))
+            self.stdout.write(f"Found {len(products)} ProductDetail records.")
+
+            self.stdout.write("Sample final_price sync previews:")
+            for p in products[:5]:
+                try:
+                    p_val = float(p.price) if p.price is not None else 0.0
+                    new_fp = str(round(p_val, 2))
+                except (ValueError, TypeError):
+                    new_fp = p.final_price
+                self.stdout.write(f"  [ID {p.id}] {p.product_name[:30]}... : final_price '{p.final_price}' -> '{new_fp}' (from price {p.price})")
+
+            if dry_run:
+                self.stdout.write(self.style.WARNING("\n[DRY RUN] No changes were written to the database."))
+                return
+
+            with transaction.atomic():
+                p_to_update = []
+                for p in products:
+                    if p.price is not None:
+                        try:
+                            p_val = float(p.price)
+                            p.final_price = str(round(p_val, 2))
+                            p_to_update.append(p)
+                        except (ValueError, TypeError):
+                            pass
+
+                models.ProductDetail.objects.bulk_update(p_to_update, ['final_price'], batch_size=500)
+                self.stdout.write(self.style.SUCCESS(f"\nSuccessfully synced final_price for {len(p_to_update)} ProductDetail records!"))
+            return
 
         xof_obj = models.CurrencyConverter.objects.filter(currency_code="XOF").first()
         if not xof_obj or not xof_obj.system_rate:
@@ -47,7 +91,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Dry Run: {dry_run}\n")
 
         # 1. ProductDetail
-        products = list(models.ProductDetail.objects.all().only('id', 'product_name', 'price'))
+        products = list(models.ProductDetail.objects.all().only('id', 'product_name', 'price', 'final_price'))
         self.stdout.write(f"Found {len(products)} ProductDetail records.")
 
         # Show samples
@@ -56,7 +100,12 @@ class Command(BaseCommand):
         for p in samples_p:
             old_p = float(p.price) if p.price is not None else 0.0
             new_p = round(old_p * rate, 2) if reverse else round(old_p / rate, 2)
-            self.stdout.write(f"  [ID {p.id}] {p.product_name[:30]}... : {old_p} -> {new_p}")
+            try:
+                old_fp = float(p.final_price) if p.final_price not in [None, '', 'null'] else 0.0
+            except (ValueError, TypeError):
+                old_fp = 0.0
+            new_fp = round(old_fp * rate, 2) if reverse else round(old_fp / rate, 2)
+            self.stdout.write(f"  [ID {p.id}] {p.product_name[:30]}... : price {old_p} -> {new_p}, final_price {old_fp} -> {new_fp}")
 
         # 2. ProductModelVariant
         variants = list(models.ProductModelVariant.objects.all().only('id', 'name', 'price'))
@@ -84,16 +133,28 @@ class Command(BaseCommand):
             # Update ProductDetail
             p_to_update = []
             for p in products:
+                updated = False
                 if p.price is not None:
                     try:
                         old_val = float(p.price)
                         p.price = round(old_val * rate, 2) if reverse else round(old_val / rate, 2)
-                        p_to_update.append(p)
+                        updated = True
                     except (ValueError, TypeError):
                         pass
 
-            models.ProductDetail.objects.bulk_update(p_to_update, ['price'], batch_size=500)
-            self.stdout.write(self.style.SUCCESS(f"Updated {len(p_to_update)} ProductDetail records."))
+                if p.final_price not in [None, '', 'null']:
+                    try:
+                        old_fp = float(p.final_price)
+                        p.final_price = str(round(old_fp * rate, 2) if reverse else round(old_fp / rate, 2))
+                        updated = True
+                    except (ValueError, TypeError):
+                        pass
+
+                if updated:
+                    p_to_update.append(p)
+
+            models.ProductDetail.objects.bulk_update(p_to_update, ['price', 'final_price'], batch_size=500)
+            self.stdout.write(self.style.SUCCESS(f"Updated {len(p_to_update)} ProductDetail records (price & final_price)."))
 
             # Update ProductModelVariant
             v_to_update = []

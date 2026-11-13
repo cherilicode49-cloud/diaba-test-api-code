@@ -553,6 +553,7 @@ urlpatterns = [
 
 
 # Extra Apis
+    path('api/convert_base_price_to_usd/', convert_base_price_to_usd_api, name='convert_base_price_to_usd_api'),
     path('api/convert_string_date_to_datetime/',convert_string_date_to_datetime, name='convert_string_date_to_datetime'), #done
     path('api/product_remove_add_to_cart/',product_remove_add_to_cart, name='product_remove_add_to_cart'), #done
     path('api/need_to_change/',need_to_change, name='need_to_change'), #done
