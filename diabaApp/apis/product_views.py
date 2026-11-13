@@ -2461,6 +2461,11 @@ def all_product_list(request):
         status='bulk'
     ).count()
 
+    total_yuwi_go_records = models.ProductDetail.objects.filter(
+        filter_condition,
+        Q(status='yuwi_go') | Q(status='yiwu_go') | Q(product_added_from='yuwi_go') | Q(product_added_from='yiwu_go')
+    ).count()
+
     total_records = models.ProductDetail.objects.filter(
         filter_condition,
         product_verification='Approved',
@@ -2523,7 +2528,9 @@ def all_product_list(request):
         'total_pages': int(np.ceil(total_records / row_size)),
         'total_pending_records': total_pending_records,
         'pending_inquiry_count': pending_inquiry_count,
-        'total_bulk_records': total_bulk_records
+        'total_bulk_records': total_bulk_records,
+        'total_yuwi_go_records': total_yuwi_go_records,
+        'total_yiwu_go_records': total_yuwi_go_records,
     }
 
     json_data = JSONRenderer().render(res)
@@ -5397,6 +5404,87 @@ def pending_product_verification_list_admin(request):
     }
     json_data = JSONRenderer().render(res)
     return HttpResponse(json_data, content_type= 'application/json', status=200)
+
+
+@csrf_exempt
+def yuwi_go_product_list_admin(request):
+    try:
+        if request.body:
+            python_data = JSONParser().parse(io.BytesIO(request.body))
+        else:
+            python_data = request.GET.dict()
+    except Exception:
+        python_data = request.GET.dict() if hasattr(request, 'GET') else {}
+
+    page_number = int(python_data.get('page_number', 1) or 1)
+    row_size = int(python_data.get('row_data', 10) or 10)
+    last_row = row_size * page_number
+    first_row = max(0, last_row - row_size)
+
+    category_name = python_data.get('category_name', None)
+    search_key = python_data.get('search_key', None)
+    subcategory_name = python_data.get('subcategory_name', None)
+
+    filter_condition = Q(is_deleted=False) & (
+        Q(status='yuwi_go') | Q(status='yiwu_go') | Q(product_added_from='yuwi_go') | Q(product_added_from='yiwu_go')
+    )
+
+    if category_name not in [None, '', 'null']:
+        filter_condition &= Q(category__category=category_name)
+
+    if subcategory_name not in [None, '', 'null']:
+        filter_condition &= Q(subcategory__subcategory=subcategory_name)
+
+    if search_key not in [None, '', 'null']:
+        search_words = str(search_key).strip().split()
+        search_query = Q()
+        for word in search_words:
+            search_query &= (
+                Q(product_name__unaccent__icontains=word) |
+                Q(refpro__unaccent__icontains=word) |
+                Q(product_code__unaccent__icontains=word) |
+                Q(product_name_french__unaccent__icontains=word)
+            )
+        filter_condition &= search_query
+
+    total_count = models.ProductDetail.objects.filter(filter_condition).count()
+    all_product = models.ProductDetail.objects.filter(
+        filter_condition
+    ).select_related('category', 'subcategory', 'vendor').order_by('-id')[first_row:last_row]
+
+    all_product_list_p = list(all_product)
+    product_ids = [p.id for p in all_product_list_p]
+
+    price_map = {}
+    if product_ids:
+        for row in models.ProductModelVariant.objects.filter(
+            product_id__in=product_ids
+        ).values('product_id').annotate(
+            max_price=Max('price'),
+            min_price=Min('price')
+        ):
+            price_map[row['product_id']] = row
+
+    list_data = []
+    for product in all_product_list_p:
+        price_data = price_map.get(product.id, {'max_price': None, 'min_price': None})
+        serializer = ProductDetailSerializer(product).data
+        serializer.update({
+            'max_price': price_data.get('max_price'),
+            'min_price': price_data.get('min_price')
+        })
+        list_data.append(serializer)
+
+    res = {
+        'data': list_data,
+        'total_records': total_count,
+        'total_yuwi_go_product_count': total_count,
+        'total_yiwu_go_product_count': total_count,
+        'current_page': page_number,
+        'total_pages': int(np.ceil(total_count / row_size)) if total_count else 0,
+    }
+    json_data = JSONRenderer().render(res)
+    return HttpResponse(json_data, content_type='application/json', status=200)
 
 
 @csrf_exempt
