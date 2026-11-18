@@ -1231,8 +1231,161 @@ def _download_image_as_content_file(url, prefix="ywg"):
         return None
 
 
-def _resolve_category_and_subcategory(category_hint=None, category_id=None, subcategory_id=None):
-    """Resolve Diaba CategoryDetail and SubCategoryDetail with sensible fallbacks."""
+def _match_any(patterns, text):
+    """Match regex pattern or substring in text."""
+    if not text:
+        return False
+    for p in patterns:
+        if p.startswith(r"\b") or "\\" in p:
+            if re.search(p, text, re.IGNORECASE):
+                return True
+        else:
+            if p.lower() in text.lower():
+                return True
+    return False
+
+
+def _classify_product_category(title, description=None, category_hint=None):
+    """
+    Intelligently classify a product into a Diaba (category_name, subcategory_name)
+    using title, description, and category hints.
+    """
+    def _eval(text):
+        if not text:
+            return None
+
+        # 1. Umbrella & Rainwear (Accessoires Saisonnier)
+        if _match_any([r"\bumbrella\b", r"\bumbrellas\b", r"\bparasol\b", r"\bparapluie\b", "雨伞", "阳伞", "雨披", "雨衣", "raincoat", "rain poncho", "rainwear", "rainproof"], text):
+            if _match_any(["raincoat", "rain poncho", "rainwear", "rainproof", "雨衣", "雨披"], text):
+                return "Accessoires Saisonnier", "Vêtements de pluie"
+            if _match_any(["rain boot", "botte de pluie", "雨靴"], text):
+                return "Accessoires Saisonnier", "Botte de Pluie"
+            return "Accessoires Saisonnier", "Parapluies"
+
+        # 2. Intimate / Underwear / Bra (Univers Intime et Confort)
+        if _match_any(["breast patch", "invisible bra", r"\bbra\b", r"\bbras\b", r"\bunderwear\b", r"\blingerie\b", r"\bnightwear\b", r"\bpajama\b", r"\bpajamas\b", r"\bsleepwear\b", r"\bpanties\b", r"\bboxer\b", r"\bboxers\b", "胸贴", "内衣", "文胸", "睡衣", "内裤", "底裤"], text):
+            return "Univers Intime et Confort", "vêtements de nuit pour femme"
+
+        # 3. Bags: School bags
+        if _match_any([r"\bschoolbag\b", r"\bschoolbags\b", "student bag", "书包", "学生包"], text):
+            return "Fournitures Scolaires & Bureau", "Fournitures Scolaires"
+
+        # 4. Packaging / Trash / Plastic / Gift bags & Tape
+        if _match_any(["garbage bag", "trash bag", "vest bag", "plastic bag", "packaging bag", "ziplock", "zipper bag", "candy bag", "gift bag", "gauze bag", "take-out bag", "fruit bag", "shopping bag", "food bag", "food packaging", "垃圾袋", "塑料袋", "背心袋", "方便袋", "包装袋", "自封袋", "骨口袋", "纱袋", "喜糖袋", "束口袋"], text):
+            if _match_any(["garbage", "trash", "垃圾"], text):
+                return "Articles de Nettoyage", "Équipement de Nettoyage des Sols"
+            return "Services", "Emballages & Divers"
+
+        if _match_any([r"\btape\b", "sealing tape", "packing tape", "adhesive tape", "胶带", "封箱胶", "封箱带", "透明胶"], text):
+            return "Quincaillerie", "Ruban"
+
+        # 5. Towel & Household Textile
+        if _match_any(["towel", "bath towel", "毛巾", "浴巾", "抹布"], text):
+            return "Mobiliers (Maison et Bureau) & décoration", "Textile déco"
+
+        # 6. Handbags / Backpacks / Outdoor bags
+        bag_patterns = [r"\bbag\b", r"\bbags\b", r"\bhandbag\b", r"\bhandbags\b", r"\bbackpack\b", r"\bbackpacks\b", r"\btote\b", r"\bpurse\b", r"\bcrossbody\b", "女包", "男包", "斜挎包", "双肩包", "手提包", "单肩包", "胸包", "手机包", "小包包", "登山包", "旅行包", "公文包"]
+        if _match_any(bag_patterns, text):
+            if _match_any(["women", "female", "lady", "女"], text):
+                return "Vêtements & Accessoires Femme", "Sacs Femme"
+            return "Vêtements & Accessoire Hommes", "Sacs homme"
+
+        # 7. Socks & Hosiery
+        sock_patterns = [r"\bsock\b", r"\bsocks\b", r"\bhosiery\b", r"\bstocking\b", r"\bstockings\b", "boat sock", "mid-calf sock", "ankle sock", "mid-calf", "袜子", "男袜", "女袜", "短袜", "中筒袜", "船袜", "丝袜", "棉袜"]
+        if _match_any(sock_patterns, text):
+            if _match_any(["women", "female", "lady", "女"], text):
+                return "Vêtements & Accessoires Femme", "Bijoux & Accessoires Femme"
+            return "Vêtements & Accessoire Hommes", "Bijoux & Accessoires Homme"
+
+        # 8. Hats / Caps / Headwear
+        hat_patterns = [r"\bhat\b", r"\bhats\b", r"\bcap\b", r"\bcaps\b", r"\bcasquette\b", r"\bchapeau\b", "帽子", "遮阳帽", "鸭舌帽", "草帽", "棒球帽", "发夹帽", "hairpin hat"]
+        if _match_any(hat_patterns, text):
+            if _match_any(["women", "female", "lady", "女"], text):
+                return "Vêtements & Accessoires Femme", "Bijoux & Accessoires Femme"
+            return "Vêtements & Accessoire Hommes", "Casquettes Homme"
+
+        # 9. Hair Accessories, Jewelry, Facekini, Gloves, Feather, Ribbon, Beads
+        if _match_any(["hair clip", "hairpin", "shark clip", "hair accessory", "facekini", "sunscreen mask", r"\bglove\b", r"\bgloves\b", "feather", "ribbon", "rosette", "necklace", "earring", "bracelet", "ring", "marquis", "bodhi", "round bead", "发夹", "抓夹", "鲨鱼夹", "发饰", "脸基尼", "面罩", "手套", "羽毛", "丝带", "首饰", "菩提", "佛珠"], text):
+            if _match_any(["bodhi", "round bead", "菩提", "佛珠"], text):
+                return "Produit Artisanal", "Articles Religieux"
+            return "Vêtements & Accessoires Femme", "Bijoux & Accessoires Femme"
+
+        # 10. Watch
+        if _match_any([r"\bwatch\b", r"\bwatches\b", r"\bmontre\b", "手表", "腕表"], text):
+            return "Vêtements & Accessoire Hommes", "Montre Homme"
+
+        # 11. Apparel / Clothes
+        if _match_any([r"\bdress\b", r"\bdresses\b", r"\bskirt\b", r"\bskirts\b", r"\brobe\b", r"\brobes\b", r"\bjupe\b", "连衣裙", "裙子", "半身裙"], text):
+            return "Vêtements & Accessoires Femme", "Robes Femme"
+        if _match_any([r"\bt-shirt\b", r"\bt-shirts\b", r"\bpolo\b", "t恤"], text):
+            if _match_any(["women", "female", "lady", "女"], text):
+                return "Vêtements & Accessoires Femme", "T-shirt & Polo Femme"
+            return "Vêtements & Accessoire Hommes", "T-shirt Homme"
+        if _match_any([r"\bshirt\b", r"\bshirts\b", r"\bchemise\b", "衬衫"], text):
+            if _match_any(["women", "female", "lady", "女"], text):
+                return "Vêtements & Accessoires Femme", "Chemises et Gilets Femme"
+            return "Vêtements & Accessoire Hommes", "Chemises Homme"
+        if _match_any([r"\bpants\b", r"\btrouser\b", r"\btrousers\b", r"\bjeans\b", r"\bpantalon\b", "牛仔裤", "短裤", "长裤"], text):
+            if _match_any(["women", "female", "lady", "女"], text):
+                return "Vêtements & Accessoires Femme", "Pantalon Femme"
+            return "Vêtements & Accessoire Hommes", "Pantalons Homme"
+
+        # 12. Fans & Electronics
+        if _match_any([r"\bfan\b", r"\bfans\b", "handheld fan", "mini fan", "turbofan", "wind cannon", "ventilateur", "风扇", "小风扇", "手持风扇", "小风炮"], text):
+            return "Matériels Électronique & Accessoires", "Mini Ventillateur"
+        if _match_any([r"\bphone\b", r"\bphones\b", r"\btablet\b", r"\btablets\b", "charger", "power bank", "earphone", "headphone", "手机", "充电器", "耳机"], text):
+            return "Matériels Électronique & Accessoires", "Téléphones & Tablettes"
+
+        # 13. Tools & Hardware
+        if _match_any(["drill", "hammer", "drill bit", "impact drill", "钻头", "冲击钻", "电锤"], text):
+            return "Quincaillerie", "Outil électroportatif"
+
+        # 14. Cleaning & Detergents
+        if _match_any(["toilet cleaner", "cleaner", "dirt decomposition", "cleaning foam", "deodorizing", "洁厕灵", "清洁剂"], text):
+            return "Quincaillerie", "WC et cuvettes"
+
+        # 15. Toys & Crafts
+        if _match_any(["toy", "toys", "building blocks", "squishy", "decompression", "balloon", "twist stick", "fur strip", "毛毛条", "扭扭棒", "玩具", "积木", "气球", "波波球", "捏捏乐"], text):
+            return "Jouets Enfants", "Jouets Créativité & art"
+
+        # 16. Souvenirs, Decor & Cultural
+        if _match_any(["refrigerator magnet", "fridge magnet", "enamel badge", "commemorative coin", "souvenir", "couplet", "spring festival couplet", "冰箱贴", "徽章", "对联", "春联"], text):
+            if _match_any(["couplet", "春联", "对联"], text):
+                return "Fournitures Scolaires & Bureau", "Fournitures Scolaires"
+            return "Mobiliers (Maison et Bureau) & décoration", "Déco Intérieur"
+
+        # 17. Food & Milk
+        if _match_any(["milk powder", "milk", "food", "snack", "coffee", "tea", "奶粉", "食品", "零食"], text):
+            return "Santé & Médecine", "Produits Alimentaires"
+
+        return None
+
+    # Title is the most specific signal
+    res = _eval(title)
+    if res:
+        return res
+    # Next check category_hint
+    if category_hint:
+        res = _eval(str(category_hint))
+        if res:
+            return res
+    # Lastly check description
+    if description:
+        res = _eval(str(description)[:500])
+        if res:
+            return res
+
+    return "DIVER PRODUITS", None
+
+
+def _resolve_category_and_subcategory(
+    product_name=None,
+    description=None,
+    category_hint=None,
+    category_id=None,
+    subcategory_id=None,
+):
+    """Resolve Diaba CategoryDetail and SubCategoryDetail with smart semantic classification."""
     category_obj = None
     subcategory_obj = None
 
@@ -1243,6 +1396,36 @@ def _resolve_category_and_subcategory(category_hint=None, category_id=None, subc
         if subcategory_obj and not category_obj:
             category_obj = subcategory_obj.category
 
+    # If category not yet resolved, use smart semantic classification
+    if not category_obj and (product_name or category_hint or description):
+        cat_name, subcat_name = _classify_product_category(
+            title=product_name,
+            description=description,
+            category_hint=category_hint,
+        )
+        if cat_name:
+            category_obj = models.CategoryDetail.objects.filter(
+                Q(category__iexact=cat_name) | Q(category_french__iexact=cat_name)
+            ).first()
+            if not category_obj:
+                category_obj = models.CategoryDetail.objects.filter(
+                    Q(category__icontains=cat_name) | Q(category_french__icontains=cat_name)
+                ).first()
+
+        if category_obj and subcat_name and not subcategory_obj:
+            subcategory_obj = models.SubCategoryDetail.objects.filter(
+                category=category_obj
+            ).filter(
+                Q(subcategory__iexact=subcat_name) | Q(subcategory_french__iexact=subcat_name)
+            ).first()
+            if not subcategory_obj:
+                subcategory_obj = models.SubCategoryDetail.objects.filter(
+                    category=category_obj
+                ).filter(
+                    Q(subcategory__icontains=subcat_name) | Q(subcategory_french__icontains=subcat_name)
+                ).first()
+
+    # Fallback to category_hint direct lookup if still not found
     if not category_obj and category_hint:
         hint = str(category_hint).strip()
         category_obj = models.CategoryDetail.objects.filter(
@@ -1253,9 +1436,13 @@ def _resolve_category_and_subcategory(category_hint=None, category_id=None, subc
                 Q(category__icontains=hint) | Q(category_french__icontains=hint)
             ).first()
 
+    # Safe general fallback: DIVER PRODUITS or Services or Collection de Produit
     if not category_obj:
         category_obj = (
-            models.CategoryDetail.objects.filter(status="Active").first()
+            models.CategoryDetail.objects.filter(category__iexact="DIVER PRODUITS").first()
+            or models.CategoryDetail.objects.filter(category__icontains="Collection de Produit").first()
+            or models.CategoryDetail.objects.filter(category__icontains="Services").first()
+            or models.CategoryDetail.objects.filter(status="Active").first()
             or models.CategoryDetail.objects.first()
         )
 
@@ -1264,13 +1451,6 @@ def _resolve_category_and_subcategory(category_hint=None, category_id=None, subc
             models.SubCategoryDetail.objects.filter(category=category_obj, status="Active").first()
             or models.SubCategoryDetail.objects.filter(category=category_obj).first()
         )
-    if not subcategory_obj:
-        subcategory_obj = (
-            models.SubCategoryDetail.objects.filter(status="Active").first()
-            or models.SubCategoryDetail.objects.first()
-        )
-        if subcategory_obj and not category_obj:
-            category_obj = subcategory_obj.category
 
     return category_obj, subcategory_obj
 
@@ -1630,6 +1810,8 @@ def _import_single_yuwi_go_product(
     """Create a ProductDetail (status='yuwi_go', product_added_from='yuwi_go') and its children."""
     product_name = normalized["title"]
     category_obj, subcategory_obj = _resolve_category_and_subcategory(
+        product_name=product_name,
+        description=normalized.get("description"),
         category_hint=normalized.get("category_hint"),
         category_id=normalized.get("category_id") or default_category_id,
         subcategory_id=normalized.get("subcategory_id") or default_subcategory_id,
@@ -1725,13 +1907,18 @@ def _import_single_yuwi_go_product(
 
     image_kwargs = {}
     if download_images:
-        for idx, img_url in enumerate(normalized["image_urls"][:8], start=1):
-            img_file = _download_image_as_content_file(img_url, prefix=f"ywg_{idx}")
-            if img_file:
-                image_kwargs[f"product_image_{idx}"] = img_file
+        urls_to_download = normalized["image_urls"][:5]
+        if urls_to_download:
+            def _fetch_img(idx_url):
+                idx, url = idx_url
+                return idx, _download_image_as_content_file(url, prefix=f"ywg_{idx}")
+            with ThreadPoolExecutor(max_workers=min(5, len(urls_to_download))) as pool:
+                for idx, img_file in pool.map(_fetch_img, enumerate(urls_to_download, start=1)):
+                    if img_file:
+                        image_kwargs[f"product_image_{idx}"] = img_file
 
     with transaction.atomic():
-        product = models.ProductDetail.objects.create(
+        product = models.ProductDetail(
             product_name=product_name,
             product_name_french=product_name_french,
             product_code=product_code,
@@ -1768,6 +1955,8 @@ def _import_single_yuwi_go_product(
             is_deleted=False,
             **image_kwargs,
         )
+        product._skip_faiss_refresh = True
+        product.save()
 
         if available_country_ids:
             country_ids = available_country_ids
@@ -1905,6 +2094,7 @@ def _process_yuwi_go_items(
     available_country_ids=None,
     translate_enabled=True,
     download_images=True,
+    fetch_detail=True,
 ):
     """Import a batch of raw/formatted Yiwugo items and return (created, skipped, failed)."""
     created_products = []
@@ -1919,16 +2109,38 @@ def _process_yuwi_go_items(
     if raw_batch_titles:
         _translate_many(raw_batch_titles, dest="en")
 
+    # Concurrent pre-fetch of all details for items in this batch
+    detail_map = {}
+    if access_token and fetch_detail:
+        ids_to_fetch = [
+            item.get("id")
+            for item in raw_items
+            if isinstance(item, dict) and item.get("id") and not item.get("detail_data")
+        ]
+        if ids_to_fetch:
+            active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
+            def _fetch_one_detail(pid):
+                try:
+                    return pid, _fetch_yiwugo_product_detail(pid, access_token=active_token, is_oauth_token=is_oauth_token)
+                except Exception:
+                    return pid, None
+            with ThreadPoolExecutor(max_workers=min(12, len(ids_to_fetch))) as pool:
+                for pid, d_data in pool.map(_fetch_one_detail, ids_to_fetch):
+                    if d_data:
+                        detail_map[str(pid)] = d_data
+
     for item in raw_items:
         source_id = item.get("id") if isinstance(item, dict) else None
         detail_data = None
         if access_token and source_id and not item.get("detail_data"):
-            active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
-            detail_data = _fetch_yiwugo_product_detail(
-                source_id,
-                access_token=active_token,
-                is_oauth_token=is_oauth_token,
-            )
+            detail_data = detail_map.get(str(source_id))
+            if not detail_data and fetch_detail:
+                active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
+                detail_data = _fetch_yiwugo_product_detail(
+                    source_id,
+                    access_token=active_token,
+                    is_oauth_token=is_oauth_token,
+                )
         elif doc_detail_example:
             doc_vo_id = (doc_detail_example.get("detail") or {}).get("productDetailVO", {}).get("id")
             if doc_vo_id and str(doc_vo_id) == str(source_id):
@@ -1946,11 +2158,40 @@ def _process_yuwi_go_items(
             continue
 
         # Duplicate check scoped strictly to product_added_from = 'yuwi_go'
-        if models.ProductDetail.objects.filter(
+        existing_product = models.ProductDetail.objects.filter(
             product_added_from=YUWI_GO_SOURCE,
             product_name__iexact=product_name,
             is_deleted=False,
-        ).exists():
+        ).first()
+        if existing_product:
+            # If the existing product is missing its primary image, backfill images
+            if download_images and not existing_product.product_image_1 and normalized.get("image_urls"):
+                urls_to_download = normalized["image_urls"][:5]
+                def _fetch_img(idx_url):
+                    idx, url = idx_url
+                    return idx, _download_image_as_content_file(url, prefix=f"ywg_{idx}")
+                updated_fields = []
+                with ThreadPoolExecutor(max_workers=min(5, len(urls_to_download))) as pool:
+                    for idx, img_file in pool.map(_fetch_img, enumerate(urls_to_download, start=1)):
+                        if img_file:
+                            setattr(existing_product, f"product_image_{idx}", img_file)
+                            updated_fields.append(f"product_image_{idx}")
+                if updated_fields:
+                    existing_product._skip_faiss_refresh = True
+                    existing_product.save(update_fields=updated_fields)
+                    created_products.append({
+                        "id": existing_product.id,
+                        "source_id": normalized["source_id"],
+                        "product_name": existing_product.product_name,
+                        "product_code": existing_product.product_code,
+                        "price_cny": normalized["raw_price_cny"],
+                        "price_usd": existing_product.price,
+                        "status": existing_product.status,
+                        "product_added_from": existing_product.product_added_from,
+                        "action": "images_backfilled",
+                    })
+                    continue
+
             skipped_products.append({
                 "source_id": normalized["source_id"],
                 "product_name": product_name,
@@ -2010,6 +2251,7 @@ def _run_yuwi_go_bulk_job(
     is_oauth_token=False,
     first_page_items=None,
     page_fetcher=None,
+    fetch_detail=True,
 ):
     """Background worker to import all requested Yiwugo pages sequentially."""
     try:
@@ -2022,13 +2264,27 @@ def _run_yuwi_go_bulk_job(
                 else:
                     page_items = list(page_fetcher(current_page) or [])
             else:
-                page_data = first_page_data if current_page == start_page else _fetch_yiwugo_live_page(
-                    access_token=active_token,
-                    page=current_page,
-                    page_size=page_size,
-                    search_query=search_query,
-                    is_oauth_token=is_oauth_token,
-                )
+                page_data = None
+                if current_page == start_page and first_page_data is not None:
+                    page_data = first_page_data
+                else:
+                    for retry in range(3):
+                        try:
+                            page_data = _fetch_yiwugo_live_page(
+                                access_token=active_token,
+                                page=current_page,
+                                page_size=page_size,
+                                search_query=search_query,
+                                is_oauth_token=is_oauth_token,
+                            )
+                            break
+                        except Exception as p_err:
+                            if retry == 2:
+                                with YUWI_GO_JOBS_LOCK:
+                                    YUWI_GO_IMPORT_JOBS[job_id]["last_error"] = f"Page {current_page} fetch failed: {str(p_err)}"
+                                page_data = {}
+                            else:
+                                time.sleep(1.5)
                 page_items = list((page_data or {}).get("prslist") or [])
 
             if product_id_filter:
@@ -2054,6 +2310,7 @@ def _run_yuwi_go_bulk_job(
                 available_country_ids=available_country_ids,
                 translate_enabled=translate_enabled,
                 download_images=download_images,
+                fetch_detail=fetch_detail,
             )
 
             with YUWI_GO_JOBS_LOCK:
@@ -2128,13 +2385,19 @@ def import_yuwi_go_products(request):
     available_country_ids = params.get("available_country_ids")
     if isinstance(available_country_ids, str):
         available_country_ids = [int(x.strip()) for x in available_country_ids.split(",") if x.strip().isdigit()]
+    incoming_products = params.get("products")
+    if "import_all" in params:
+        import_all = str(params.get("import_all")).lower() in ["true", "1", "yes"]
+    else:
+        import_all = not (isinstance(incoming_products, list) and incoming_products) and not params.get("page") and not params.get("cpage")
+
     translate_enabled = str(params.get("translate", "true")).lower() not in ["false", "0", "no"]
     download_images = str(params.get("download_images", "true")).lower() not in ["false", "0", "no"]
-    import_all = str(params.get("import_all", "false")).lower() in ["true", "1", "yes"]
+    fast_mode = str(params.get("fast_mode", "false")).lower() in ["true", "1", "yes"]
+    fetch_detail = False if fast_mode else (str(params.get("fetch_detail", "true")).lower() not in ["false", "0", "no"])
 
     explicit_token = params.get("access_token") or request.headers.get("X-Access-Token")
     access_token, is_oauth_token = _get_yiwugo_access_token(explicit_token)
-    incoming_products = params.get("products")
     doc_detail_example = None
     source_note = None
 
@@ -2226,6 +2489,7 @@ def import_yuwi_go_products(request):
                             "translate_enabled": translate_enabled,
                             "download_images": download_images,
                             "is_oauth_token": is_oauth_token,
+                            "fetch_detail": fetch_detail,
                         },
                         daemon=True,
                     )
@@ -2242,6 +2506,9 @@ def import_yuwi_go_products(request):
                             "total_products_available": total_found,
                             "total_pages_available": total_pages,
                             "exchange_rate": f"{cny_rate} CNY = 1 USD",
+                            "download_images": download_images,
+                            "fetch_detail": fetch_detail,
+                            "fast_mode": fast_mode,
                         },
                         status=202,
                         json_dumps_params={"indent": 2},
@@ -2279,6 +2546,7 @@ def import_yuwi_go_products(request):
                         available_country_ids=available_country_ids,
                         translate_enabled=translate_enabled,
                         download_images=download_images,
+                        fetch_detail=fetch_detail,
                     )
                     all_created.extend(c_list)
                     all_skipped.extend(s_list)
@@ -2356,6 +2624,7 @@ def import_yuwi_go_products(request):
         available_country_ids=available_country_ids,
         translate_enabled=translate_enabled,
         download_images=download_images,
+        fetch_detail=fetch_detail,
     )
 
     response_payload = {
@@ -2409,9 +2678,15 @@ def sync_third_party_products(request):
     available_country_ids = params.get("available_country_ids")
     if isinstance(available_country_ids, str):
         available_country_ids = [int(x.strip()) for x in available_country_ids.split(",") if x.strip().isdigit()]
+    if "import_all" in params:
+        import_all = str(params.get("import_all")).lower() in ["true", "1", "yes"]
+    else:
+        import_all = not params.get("page") and not params.get("cpage")
+
     translate_enabled = str(params.get("translate", "true")).lower() not in ["false", "0", "no"]
     download_images = str(params.get("download_images", "true")).lower() not in ["false", "0", "no"]
-    import_all = str(params.get("import_all", "false")).lower() in ["true", "1", "yes"]
+    fast_mode = str(params.get("fast_mode", "false")).lower() in ["true", "1", "yes"]
+    fetch_detail = False if fast_mode else (str(params.get("fetch_detail", "true")).lower() not in ["false", "0", "no"])
     max_pages = int(params["max_pages"]) if str(params.get("max_pages", "")).isdigit() else None
     fetch_api_url = (params.get("fetch_api_url") or "").strip()
 
@@ -2517,6 +2792,7 @@ def sync_third_party_products(request):
                 "is_oauth_token": is_oauth_token if is_live_mode else False,
                 "first_page_items": first_payload.get("products") or [],
                 "page_fetcher": _background_page_fetcher,
+                "fetch_detail": fetch_detail,
             },
             daemon=True,
         )
@@ -2573,6 +2849,7 @@ def sync_third_party_products(request):
             available_country_ids=available_country_ids,
             translate_enabled=translate_enabled,
             download_images=download_images,
+            fetch_detail=fetch_detail,
         )
         all_created.extend(created)
         all_skipped.extend(skipped)
