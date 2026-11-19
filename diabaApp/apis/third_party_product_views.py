@@ -14,9 +14,7 @@ import inspect
 import threading
 import requests
 import math
-import urllib.parse
-import concurrent.futures
-from concurrent.futures import ThreadPoolExecutor, wait, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from django.conf import settings
 from django.core.cache import cache
@@ -26,10 +24,7 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
-try:
-    from googletrans import Translator
-except Exception:
-    Translator = None
+from googletrans import Translator
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -99,13 +94,15 @@ def _get_yiwugo_access_token(explicit_token=None, force_refresh=False):
     """Resolve explicit token, settings.YIWUGO_ACCESS_TOKEN, or auto-fetched OAuth token."""
     if explicit_token:
         return explicit_token, False
-    if force_refresh:
-        return _fetch_yiwugo_oauth_token(force_refresh=True), True
     configured = (getattr(settings, "YIWUGO_ACCESS_TOKEN", None) or os.getenv("YIWUGO_ACCESS_TOKEN") or "").strip()
-    # "67477461257f49e8404b857d2bf15f85" is expired historical dummy token; ignore it so test envs never break
-    if configured and configured != "67477461257f49e8404b857d2bf15f85":
+    if configured and not force_refresh:
         return configured, False
-    return _fetch_yiwugo_oauth_token(force_refresh=force_refresh), True
+    oauth_token = _fetch_yiwugo_oauth_token(force_refresh=force_refresh)
+    if oauth_token:
+        return oauth_token, True
+    if configured:
+        return configured, False
+    return None, False
 
 
 def _fetch_apipost_docs(issue_id=APIPOST_ISSUE_ID, password=APIPOST_DEFAULT_PASSWORD, target_ids=None):
@@ -297,12 +294,8 @@ def _fetch_third_party_products_data(params, headers=None):
         all_param_keys.update(item.keys())
         p_id = item.get('id')
         raw_p_title = item.get('title') or ''
-        p_title = _translate_to_english(raw_p_title, enabled=True, fallback="")
-        if not p_title:
-            p_title = _strip_cjk(raw_p_title) or (f"Yiwugo Product {p_id}" if p_id else "Yiwugo Product")
+        p_title = _translate_to_english(raw_p_title, enabled=True, fallback=f"Yiwugo Product {p_id}" if p_id else "")
         p_title_french = _translate_to_french(p_title, enabled=translate_fetch) if p_title else ""
-        if not p_title_french or _contains_cjk(p_title_french):
-            p_title_french = p_title
         p_price = item.get('sellPrice')
         p_start_num = item.get('startNum')
         p_metric = _normalize_measure_to_english(item.get('metric'))
@@ -929,6 +922,10 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _TRANSLATION_CACHE = {}
 _TRANSLATION_CACHE_LOCK = threading.Lock()
+_TRANSLATE_SESSION = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=2)
+_TRANSLATE_SESSION.mount("https://", _adapter)
+_TRANSLATE_SESSION.mount("http://", _adapter)
 
 _YIWUGO_UNIT_MAP = {
     "公斤": "kg",
@@ -1070,74 +1067,8 @@ def _strip_cjk(text):
     return cleaned
 
 
-def _translate_single_network(text, dest="en", timeout=4):
-    """
-    Translate text to destination language (en or fr).
-    Primary: Google Translate Dict client (clients5.google.com).
-    Secondary: Youdao translation API.
-    Tertiary: googletrans fallback.
-    """
-    if not text:
-        return None
-    clean = str(text).strip()
-    if not clean:
-        return None
-
-    # Google clients5 works best with text under ~800 chars per GET call
-    snippet = clean[:800]
-
-    # 1. Google Clients5 Dict API
-    try:
-        url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl={dest}&q={urllib.parse.quote(snippet)}"
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=timeout)
-        if resp.status_code == 200:
-            data = resp.json()
-            if isinstance(data, list) and data:
-                first = data[0]
-                cand = None
-                if isinstance(first, list) and first:
-                    cand = str(first[0]).strip()
-                elif isinstance(first, str):
-                    cand = first.strip()
-                if cand and not (dest in ["en", "fr"] and _contains_cjk(cand)):
-                    return cand
-    except Exception:
-        pass
-
-    # 2. Youdao Free Translation Endpoint
-    try:
-        resp = requests.post(
-            "https://aidemo.youdao.com/trans",
-            data={"q": snippet, "from": "Auto", "to": dest},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=timeout
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            translations = data.get("translation")
-            if isinstance(translations, list) and translations:
-                cand = str(translations[0]).strip()
-                if cand and not (dest in ["en", "fr"] and _contains_cjk(cand)):
-                    return cand
-    except Exception:
-        pass
-
-    # 3. Googletrans library fallback if available
-    if Translator:
-        try:
-            with Translator(timeout=timeout) as translator:
-                res = translator.translate(snippet, dest=dest)
-                cand = getattr(res, "text", None)
-                if cand and not (dest in ["en", "fr"] and _contains_cjk(cand)):
-                    return cand.strip()
-        except Exception:
-            pass
-
-    return None
-
-
 def _translate_many(texts, dest="en"):
-    """Translate a sequence of distinct texts concurrently, caching results."""
+    """Translate a sequence of distinct texts concurrently via Google Chrome Extension Translate API, caching results."""
     unique_inputs = []
     seen = set()
     for raw in texts or []:
@@ -1159,15 +1090,28 @@ def _translate_many(texts, dest="en"):
         unique_inputs.append(snippet)
 
     if unique_inputs:
-        def _worker(s):
-            trans = _translate_single_network(s, dest=dest, timeout=5)
-            if trans:
-                with _TRANSLATION_CACHE_LOCK:
-                    _TRANSLATION_CACHE[(s, dest)] = trans
-
-        with ThreadPoolExecutor(max_workers=min(10, len(unique_inputs))) as pool:
-            futures = [pool.submit(_worker, s) for s in unique_inputs]
-            wait(futures, timeout=12)
+        url = "https://clients5.google.com/translate_a/t"
+        for start in range(0, len(unique_inputs), 25):
+            chunk = unique_inputs[start:start + 25]
+            try:
+                resp = _TRANSLATE_SESSION.post(
+                    url,
+                    params={"client": "dict-chrome-ex", "sl": "auto", "tl": dest},
+                    data={"q": chunk},
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        with _TRANSLATION_CACHE_LOCK:
+                            if len(_TRANSLATION_CACHE) > 30000:
+                                _TRANSLATION_CACHE.clear()
+                            for snippet, item in zip(chunk, data):
+                                t = item[0] if isinstance(item, list) else str(item)
+                                if t:
+                                    _TRANSLATION_CACHE[(snippet, dest)] = str(t).strip()
+            except Exception as e:
+                logger.warning(f"Translation batch failed for {len(chunk)} items (dest={dest}): {e}")
 
     output = {}
     for raw in texts or []:
@@ -1181,11 +1125,7 @@ def _translate_many(texts, dest="en"):
             output[clean] = clean
         else:
             with _TRANSLATION_CACHE_LOCK:
-                trans = _TRANSLATION_CACHE.get((snippet, dest))
-            if trans:
-                output[clean] = trans
-            else:
-                output[clean] = clean
+                output[clean] = _TRANSLATION_CACHE.get((snippet, dest), clean)
     return output
 
 
@@ -1205,23 +1145,24 @@ def _translate_to_english(text, enabled=True, fallback=""):
 
     if _contains_cjk(translated):
         stripped = _strip_cjk(translated)
-        return stripped or fallback or ""
-    return translated or fallback or ""
+        return stripped or fallback
+    return translated or fallback
 
 
 def _translate_to_french(text, enabled=True):
-    """Translate text to French, falling back on error without Chinese characters."""
+    """Translate text to French via googletrans (cached, supports sync/async), falling back on error."""
     if text is None:
         return ""
     clean = str(text).strip()
     if not clean or not enabled:
-        return clean if not _contains_cjk(clean) else ""
+        return clean
 
     translated = _translate_many([clean], dest="fr").get(clean, clean)
     if _contains_cjk(translated):
         stripped = _strip_cjk(translated)
-        return stripped
-    return translated
+        if stripped:
+            return stripped
+    return translated or clean
 
 
 def _normalize_measure_to_english(raw_measure, fallback="pcs"):
@@ -1451,6 +1392,12 @@ def _classify_product_category(title, description=None, category_hint=None):
     return "DIVER PRODUITS", None
 
 
+_CATEGORY_CACHE = {}
+_CATEGORY_CACHE_LOCK = threading.Lock()
+_VENDOR_CACHE = {}
+_VENDOR_CACHE_LOCK = threading.Lock()
+
+
 def _resolve_category_and_subcategory(
     product_name=None,
     description=None,
@@ -1458,7 +1405,17 @@ def _resolve_category_and_subcategory(
     category_id=None,
     subcategory_id=None,
 ):
-    """Resolve Diaba CategoryDetail and SubCategoryDetail with smart semantic classification."""
+    """Resolve Diaba CategoryDetail and SubCategoryDetail with smart semantic classification and in-memory caching."""
+    cache_key = (
+        category_id,
+        subcategory_id,
+        str(product_name or "").strip()[:80],
+        str(category_hint or "").strip(),
+    )
+    with _CATEGORY_CACHE_LOCK:
+        if cache_key in _CATEGORY_CACHE:
+            return _CATEGORY_CACHE[cache_key]
+
     category_obj = None
     subcategory_obj = None
 
@@ -1525,11 +1482,17 @@ def _resolve_category_and_subcategory(
             or models.SubCategoryDetail.objects.filter(category=category_obj).first()
         )
 
-    return category_obj, subcategory_obj
+    res = (category_obj, subcategory_obj)
+    with _CATEGORY_CACHE_LOCK:
+        if len(_CATEGORY_CACHE) > 5000:
+            _CATEGORY_CACHE.clear()
+        _CATEGORY_CACHE[cache_key] = res
+
+    return res
 
 
 def _resolve_or_create_vendor(shop_info=None, vendor_id=None, category_obj=None, subcategory_obj=None):
-    """Look up an existing VendorDetail or create one for the Yiwugo shop."""
+    """Look up an existing VendorDetail or create one for the Yiwugo shop with in-memory caching."""
     if vendor_id:
         vendor = models.VendorDetail.objects.filter(id=vendor_id).first()
         if vendor:
@@ -1538,70 +1501,85 @@ def _resolve_or_create_vendor(shop_info=None, vendor_id=None, category_obj=None,
     shop_info = shop_info or {}
     raw_shop_name = (shop_info.get("shopName") or shop_info.get("shop_name") or "").strip()
     shop_name = _translate_to_english(raw_shop_name, enabled=True, fallback="Yiwugo Supplier") if raw_shop_name else ""
+    vendor_cache_key = shop_name or raw_shop_name or "Yiwugo Supplier"
 
-    if shop_name:
-        vendor = models.VendorDetail.objects.filter(
-            Q(company_name__iexact=shop_name)
-            | Q(vendor_name__iexact=shop_name)
-            | Q(company_name__iexact=raw_shop_name)
-        ).first()
-        if vendor:
-            updated_fields = []
-            if _contains_cjk(vendor.company_name):
-                vendor.company_name = shop_name[:200]
-                updated_fields.append("company_name")
-            if _contains_cjk(vendor.vendor_name):
-                vendor.vendor_name = _translate_to_english(vendor.vendor_name, enabled=True, fallback=shop_name)[:200]
-                updated_fields.append("vendor_name")
-            if _contains_cjk(vendor.office_address):
-                vendor.office_address = _translate_to_english(vendor.office_address, enabled=True)[:500]
-                updated_fields.append("office_address")
-            if updated_fields:
-                vendor.save(update_fields=updated_fields)
+    with _VENDOR_CACHE_LOCK:
+        if vendor_cache_key in _VENDOR_CACHE:
+            return _VENDOR_CACHE[vendor_cache_key]
+
+    with _VENDOR_CACHE_LOCK:
+        if vendor_cache_key in _VENDOR_CACHE:
+            return _VENDOR_CACHE[vendor_cache_key]
+
+        if shop_name:
+            vendor = models.VendorDetail.objects.filter(
+                Q(company_name__iexact=shop_name)
+                | Q(vendor_name__iexact=shop_name)
+                | Q(company_name__iexact=raw_shop_name)
+            ).first()
+            if vendor:
+                updated_fields = []
+                if _contains_cjk(vendor.company_name):
+                    vendor.company_name = shop_name[:200]
+                    updated_fields.append("company_name")
+                if _contains_cjk(vendor.vendor_name):
+                    vendor.vendor_name = _translate_to_english(vendor.vendor_name, enabled=True, fallback=shop_name)[:200]
+                    updated_fields.append("vendor_name")
+                if _contains_cjk(vendor.office_address):
+                    vendor.office_address = _translate_to_english(vendor.office_address, enabled=True)[:500]
+                    updated_fields.append("office_address")
+                if updated_fields:
+                    vendor.save(update_fields=updated_fields)
+                _VENDOR_CACHE[vendor_cache_key] = vendor
+                return vendor
+
+            raw_contacter = (shop_info.get("contacter") or "").strip()
+            vendor_contact = _translate_to_english(raw_contacter, enabled=True, fallback=shop_name) if raw_contacter else shop_name
+            raw_address = (
+                shop_info.get("factoryAddress")
+                or shop_info.get("factory_address")
+                or shop_info.get("marketInfo")
+                or shop_info.get("market_info")
+                or shop_info.get("marketOrAdress")
+                or shop_info.get("market_address")
+                or ""
+            )
+            office_address = _translate_to_english(raw_address, enabled=True) if raw_address else ""
+
+            vendor = models.VendorDetail.objects.create(
+                category=category_obj,
+                subcategory=subcategory_obj,
+                company_name=shop_name[:200],
+                vendor_name=vendor_contact[:200],
+                office_address=office_address[:500],
+                phone_number=(shop_info.get("mobile") or shop_info.get("telephone") or "")[:200],
+                email=(shop_info.get("email") or "")[:200] or None,
+                country="China",
+                is_verify="Approved",
+                status="Active",
+            )
+            _VENDOR_CACHE[vendor_cache_key] = vendor
             return vendor
 
-        raw_contacter = (shop_info.get("contacter") or "").strip()
-        vendor_contact = _translate_to_english(raw_contacter, enabled=True, fallback=shop_name) if raw_contacter else shop_name
-        raw_address = (
-            shop_info.get("factoryAddress")
-            or shop_info.get("factory_address")
-            or shop_info.get("marketInfo")
-            or shop_info.get("market_info")
-            or shop_info.get("marketOrAdress")
-            or shop_info.get("market_address")
-            or ""
+        default_vendor = (
+            models.VendorDetail.objects.filter(company_name__iexact="Yiwugo Supplier").first()
+            or models.VendorDetail.objects.first()
         )
-        office_address = _translate_to_english(raw_address, enabled=True) if raw_address else ""
+        if default_vendor:
+            _VENDOR_CACHE[vendor_cache_key] = default_vendor
+            return default_vendor
 
-        return models.VendorDetail.objects.create(
+        vendor = models.VendorDetail.objects.create(
             category=category_obj,
             subcategory=subcategory_obj,
-            company_name=shop_name[:200],
-            vendor_name=vendor_contact[:200],
-            office_address=office_address[:500],
-            phone_number=(shop_info.get("mobile") or shop_info.get("telephone") or "")[:200],
-            email=(shop_info.get("email") or "")[:200] or None,
+            company_name="Yiwugo Supplier",
+            vendor_name="Yiwugo Supplier",
             country="China",
             is_verify="Approved",
             status="Active",
         )
-
-    default_vendor = (
-        models.VendorDetail.objects.filter(company_name__iexact="Yiwugo Supplier").first()
-        or models.VendorDetail.objects.first()
-    )
-    if default_vendor:
-        return default_vendor
-
-    return models.VendorDetail.objects.create(
-        category=category_obj,
-        subcategory=subcategory_obj,
-        company_name="Yiwugo Supplier",
-        vendor_name="Yiwugo Supplier",
-        country="China",
-        is_verify="Approved",
-        status="Active",
-    )
+        _VENDOR_CACHE[vendor_cache_key] = vendor
+        return vendor
 
 
 def _fetch_yiwugo_product_detail(product_id, access_token=None, is_oauth_token=False):
@@ -1620,7 +1598,7 @@ def _fetch_yiwugo_product_detail(product_id, access_token=None, is_oauth_token=F
             if resp_json.get("code") == 0:
                 return resp_json.get("data") or {}
             if resp_json.get("code") == 501 and attempt == 0:
-                refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
+                refreshed, is_oauth_token = _get_yiwugo_access_token(force_refresh=True)
                 if refreshed:
                     access_token = refreshed
                     continue
@@ -1768,7 +1746,7 @@ def _extract_dimensions_and_quantities(detail_data, detail_vo, packing_bo, exten
     }
 
 
-def _extract_product_payload(item, detail_data=None, translate_enabled=True):
+def _extract_product_payload(item, detail_data=None):
     """Normalize either a raw Yiwugo item or a formatted item into a consistent dict."""
     raw = item.get("raw_third_party_parameters") if isinstance(item, dict) else None
     base = raw if isinstance(raw, dict) else (item if isinstance(item, dict) else {})
@@ -1796,14 +1774,11 @@ def _extract_product_payload(item, detail_data=None, translate_enabled=True):
 
     source_id = detail_vo.get("id") or item.get("id") or base.get("id")
     raw_title = (detail_vo.get("title") or item.get("title") or base.get("title") or "").strip()
-    title = _translate_to_english(raw_title, enabled=translate_enabled, fallback="")
-    if (not title or title.startswith("Yiwugo Product")) and raw_title:
-        # Retry with alt title
-        alt_title = (item.get("title") or detail_vo.get("title") or base.get("title") or "").strip()
-        if alt_title and alt_title != raw_title:
-            title = _translate_to_english(alt_title, enabled=translate_enabled, fallback="")
-        if not title:
-            title = _strip_cjk(raw_title) or (f"Yiwugo Product {source_id}" if source_id else "Yiwugo Product")
+    title = _translate_to_english(
+        raw_title,
+        enabled=True,
+        fallback=f"Yiwugo Product {source_id}" if source_id else "",
+    )
     goods_code = (
         detail_vo.get("goodsCode")
         or item.get("goods_code")
@@ -1870,6 +1845,7 @@ def _extract_product_payload(item, detail_data=None, translate_enabled=True):
     return {
         "source_id": source_id,
         "title": title,
+        "raw_title": raw_title,
         "goods_code": str(goods_code).strip(),
         "raw_price_cny": raw_price_cny,
         "min_order_quantity": dims_and_qty["min_order_quantity"],
@@ -1895,6 +1871,40 @@ def _extract_product_payload(item, detail_data=None, translate_enabled=True):
         "category_id": item.get("category_id"),
         "subcategory_id": item.get("subcategory_id"),
     }
+
+
+_STATIC_PRODUCT_DEPS = {}
+_STATIC_PRODUCT_DEPS_LOCK = threading.Lock()
+
+
+def _get_static_product_dependencies():
+    """Thread-safe cached lookup for Country, ProductType, Packaging, and AllCountry."""
+    if _STATIC_PRODUCT_DEPS:
+        return _STATIC_PRODUCT_DEPS
+    with _STATIC_PRODUCT_DEPS_LOCK:
+        if not _STATIC_PRODUCT_DEPS:
+            country_obj = (
+                models.Country.objects.filter(id=2).first()
+                or models.Country.objects.filter(country_name__icontains="China").first()
+                or models.Country.objects.first()
+            )
+            product_type_obj = (
+                models.ProductType.objects.filter(product_type__iexact="Normal").first()
+                or models.ProductType.objects.first()
+            )
+            packaging_obj = (
+                models.ProductPackagingBy.objects.filter(product_packaging__iexact="Carton").first()
+                or models.ProductPackagingBy.objects.first()
+            )
+            all_country = (
+                models.ProductCountry.objects.filter(name__iexact="All").first()
+                or models.ProductCountry.objects.filter(id=1).first()
+            )
+            _STATIC_PRODUCT_DEPS["country_id"] = country_obj.id if country_obj else None
+            _STATIC_PRODUCT_DEPS["product_type_id"] = product_type_obj.id if product_type_obj else None
+            _STATIC_PRODUCT_DEPS["packaging_id"] = packaging_obj.id if packaging_obj else None
+            _STATIC_PRODUCT_DEPS["all_country_id"] = all_country.id if all_country else None
+    return _STATIC_PRODUCT_DEPS
 
 
 def _import_single_yuwi_go_product(
@@ -1923,19 +1933,11 @@ def _import_single_yuwi_go_product(
         subcategory_obj=subcategory_obj,
     )
 
-    country_obj = (
-        models.Country.objects.filter(id=2).first()
-        or models.Country.objects.filter(country_name__icontains="China").first()
-        or models.Country.objects.first()
-    )
-    product_type_obj = (
-        models.ProductType.objects.filter(product_type__iexact="Normal").first()
-        or models.ProductType.objects.first()
-    )
-    packaging_obj = (
-        models.ProductPackagingBy.objects.filter(product_packaging__iexact="Carton").first()
-        or models.ProductPackagingBy.objects.first()
-    )
+    static_deps = _get_static_product_dependencies()
+    country_id = static_deps.get("country_id")
+    product_type_id = static_deps.get("product_type_id")
+    packaging_id = static_deps.get("packaging_id")
+    all_country_id = static_deps.get("all_country_id")
 
     if normalized["goods_code"]:
         product_code = f"YWG_{normalized['goods_code']}"
@@ -1950,19 +1952,6 @@ def _import_single_yuwi_go_product(
 
     extend_list = normalized.get("extend_list") or []
     sku_list = normalized.get("sku_list") or []
-
-    # Warm English translations concurrently for any remaining CJK in specs/SKUs
-    cjk_inputs = []
-    for spec in extend_list:
-        for s_val in (spec.get("name") or spec.get("pvalue"), spec.get("value") or spec.get("cvalue")):
-            if _contains_cjk(s_val):
-                cjk_inputs.append(str(s_val).strip())
-    for sku in sku_list:
-        for s_val in (sku.get("specificationNameOne"), sku.get("specificationNameTwo")):
-            if _contains_cjk(s_val):
-                cjk_inputs.append(str(s_val).strip())
-    if cjk_inputs:
-        _translate_many(cjk_inputs, dest="en")
 
     translated_specs = []
     for spec in extend_list:
@@ -1981,22 +1970,16 @@ def _import_single_yuwi_go_product(
         variant_name = _translate_to_english(raw_variant_name, enabled=True, fallback=model_key) if raw_variant_name else model_key
         grouped_skus.setdefault(model_key, []).append((variant_name, sku))
 
-    if translate_enabled:
-        fr_inputs = [product_name, normalized["description"]]
-        for k, v in translated_specs:
-            fr_inputs.extend([k, v])
-        for m_name, sku_pairs in grouped_skus.items():
-            fr_inputs.append(m_name)
-            for v_name, _ in sku_pairs:
-                fr_inputs.append(v_name)
-        _translate_many(fr_inputs, dest="fr")
-
-    product_name_french = _translate_to_french(product_name, enabled=translate_enabled)
+    raw_title = normalized.get("raw_title")
+    product_name_french = ""
+    if raw_title and _contains_cjk(raw_title):
+        product_name_french = _translate_to_french(raw_title, enabled=translate_enabled)
     if not product_name_french or _contains_cjk(product_name_french):
+        product_name_french = _translate_to_french(product_name, enabled=translate_enabled)
+    if not product_name_french:
         product_name_french = product_name
-    description_french = _translate_to_french(normalized["description"], enabled=translate_enabled)
-    if not description_french or _contains_cjk(description_french):
-        description_french = normalized["description"]
+
+    description_french = _translate_to_french(normalized["description"], enabled=translate_enabled) or normalized["description"]
 
     packing = normalized.get("packing_bo") or {}
     carton_length = normalized.get("carton_length") or normalized.get("length") or "10"
@@ -2031,7 +2014,7 @@ def _import_single_yuwi_go_product(
             height=prod_height,
             width=prod_width,
             weight=prod_weight,
-            country_of_origin_id=country_obj.id if country_obj else None,
+            country_of_origin_id=country_id,
             carton_length=carton_length,
             carton_width=carton_width,
             carton_height=carton_height,
@@ -2047,8 +2030,8 @@ def _import_single_yuwi_go_product(
             final_price=str(price_usd),
             status=YUWI_GO_SOURCE,
             product_added_from=YUWI_GO_SOURCE,
-            product_type_id=product_type_obj.id if product_type_obj else None,
-            product_packaging_id=packaging_obj.id if packaging_obj else None,
+            product_type_id=product_type_id,
+            product_packaging_id=packaging_id,
             shipping_via="By Air",
             created_at=timezone.now(),
             is_deleted=False,
@@ -2059,34 +2042,36 @@ def _import_single_yuwi_go_product(
 
         if available_country_ids:
             country_ids = available_country_ids
+        elif all_country_id:
+            country_ids = [all_country_id]
         else:
-            all_country = (
-                models.ProductCountry.objects.filter(name__iexact="All").first()
-                or models.ProductCountry.objects.filter(id=1).first()
-            )
-            country_ids = [all_country.id] if all_country else []
+            country_ids = []
         if country_ids:
             product.available_country.set(country_ids)
 
-        # Create ProductImage gallery records for all product images
+        # Bulk create ProductImage gallery records for all product images
+        image_records = []
         for idx in range(1, 9):
             img_field = getattr(product, f"product_image_{idx}", None)
             if img_field:
                 img_val = img_field.name if hasattr(img_field, "name") else str(img_field)
                 if img_val:
-                    models.ProductImage.objects.create(
-                        product_id=product.id,
-                        image=img_val,
-                    )
+                    image_records.append(models.ProductImage(product_id=product.id, image=img_val))
+        if image_records:
+            models.ProductImage.objects.bulk_create(image_records)
 
+        # Bulk create ProductOtherSpecification records
+        spec_records = []
         for key, val in translated_specs:
-            models.ProductOtherSpecification.objects.create(
+            spec_records.append(models.ProductOtherSpecification(
                 product_id=product.id,
                 key=key,
                 key_french=_translate_to_french(key, enabled=translate_enabled),
                 value=val,
                 value_french=_translate_to_french(val, enabled=translate_enabled),
-            )
+            ))
+        if spec_records:
+            models.ProductOtherSpecification.objects.bulk_create(spec_records)
 
         variant_prices = []
         primary_image = getattr(product, "product_image_1", None)
@@ -2106,6 +2091,8 @@ def _import_single_yuwi_go_product(
                     status="Active",
                     is_deleted=False,
                 )
+                variant_objs = []
+                sku_data_list = []
                 for variant_name, sku in sku_pairs:
                     sku_cny = sku.get("price") if sku.get("price") not in [None, "", "null"] else normalized["raw_price_cny"]
                     variant_price_usd = _convert_cny_to_usd(sku_cny, cny_rate)
@@ -2113,7 +2100,7 @@ def _import_single_yuwi_go_product(
                     sku_pic = sku.get("picture")
                     variant_image = str(sku_pic).strip() if sku_pic else primary_image_val
 
-                    variant_obj = models.ProductModelVariant.objects.create(
+                    variant_objs.append(models.ProductModelVariant(
                         product_id=product.id,
                         model_id=model_obj.id,
                         name=variant_name,
@@ -2123,17 +2110,24 @@ def _import_single_yuwi_go_product(
                         variant_verification="Approved",
                         status="Active",
                         is_deleted=False,
-                    )
-                    if vendor_obj:
-                        models.VendorProductPrice.objects.create(
+                    ))
+                    sku_data_list.append((variant_price_usd, sku.get("stock")))
+
+                created_variants = models.ProductModelVariant.objects.bulk_create(variant_objs)
+                if vendor_obj and created_variants:
+                    vpp_objs = []
+                    for v_inst, (v_price, v_stock) in zip(created_variants, sku_data_list):
+                        vpp_objs.append(models.VendorProductPrice(
                             product_id=product.id,
                             model_id=model_obj.id,
                             vendor_id=vendor_obj.id,
-                            variant_id=variant_obj.id,
-                            price=str(variant_price_usd),
-                            quantity=str(sku.get("stock")) if sku.get("stock") is not None else None,
+                            variant_id=v_inst.id,
+                            price=str(v_price),
+                            quantity=str(v_stock) if v_stock is not None else None,
                             status="Active",
-                        )
+                        ))
+                    if vpp_objs:
+                        models.VendorProductPrice.objects.bulk_create(vpp_objs)
         else:
             model_obj = models.ProductModel.objects.create(
                 product_id=product.id,
@@ -2178,43 +2172,127 @@ def _fetch_yiwugo_live_page(access_token=None, page=1, page_size=20, search_quer
     if not access_token:
         access_token, is_oauth_token = _get_yiwugo_access_token()
     if not access_token:
-        access_token = _fetch_yiwugo_oauth_token()
-        is_oauth_token = True
-    if not access_token:
         raise ValueError("No Yiwugo access_token or OAuth credentials configured.")
 
     for attempt in range(2):
         live_params = {"access_token": access_token, "cpage": page, "pageSize": page_size}
         if search_query:
             live_params["q"] = search_query
-        try:
-            resp = requests.get(
-                "https://open.yiwugo.com/open/cn_product/list",
-                params=live_params,
-                timeout=35,
-                verify=False,
-            )
-            resp_json = resp.json()
-            if resp_json.get("code") == 0:
-                return resp_json.get("data") or {}
-            if resp_json.get("code") == 501 and attempt == 0:
-                refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
-                if refreshed:
-                    access_token = refreshed
-                    is_oauth_token = True
-                    continue
-            raise ValueError(
-                f"Yiwugo live API rejected request (code={resp_json.get('code')}): {resp_json.get('message') or resp_json}"
-            )
-        except requests.exceptions.RequestException as req_err:
-            if attempt == 0:
-                refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
-                if refreshed:
-                    access_token = refreshed
-                    is_oauth_token = True
-                    continue
-            raise
+        resp = requests.get(
+            "https://open.yiwugo.com/open/cn_product/list",
+            params=live_params,
+            timeout=35,
+            verify=False,
+        )
+        resp_json = resp.json()
+        if resp_json.get("code") == 0:
+            return resp_json.get("data") or {}
+        if resp_json.get("code") == 501 and attempt == 0:
+            refreshed, is_oauth_token = _get_yiwugo_access_token(force_refresh=True)
+            if refreshed:
+                access_token = refreshed
+                continue
+        raise ValueError(
+            f"Yiwugo live API rejected request (code={resp_json.get('code')}): {resp_json.get('message') or resp_json}"
+        )
     return {}
+
+
+def _pretranslate_page_items(items, detail_map, translate_enabled=True):
+    """
+    Perform page-level bulk pre-translation across all products in a single pass.
+    Collects all CJK strings across titles, descriptions, shop info, specs, and variants,
+    translates them to English in bulk, then translates all to French in bulk.
+    All resulting strings are stored in _TRANSLATION_CACHE so that subsequent product
+    processing hits memory (0 ms) with zero network calls.
+    """
+    if not items:
+        return
+
+    # Phase 1: Collect all CJK texts needing English translation
+    cjk_inputs = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get("id") or "")
+        d_data = detail_map.get(pid) or (item if "detail" in item else {})
+        d_sec = d_data.get("detail") or {}
+        d_vo = d_sec.get("productDetailVO") or item.get("productDetailVO") or {}
+        ext_list = d_sec.get("productExtendList") or d_data.get("propertyList") or []
+        sku_list = d_sec.get("productPropertySkuBoList") or item.get("productPropertySkuBoList") or []
+        s_info = (d_data.get("shopinfo") or {}).get("shop") or item.get("supplier") or {}
+
+        for t in (d_vo.get("title"), item.get("title")):
+            if _contains_cjk(t):
+                cjk_inputs.add(str(t).strip())
+
+        raw_desc = d_vo.get("detaill") or item.get("description")
+        desc = _clean_description_text(raw_desc)
+        if _contains_cjk(desc):
+            cjk_inputs.add(str(desc).strip())
+
+        for sf in (s_info.get("shopName"), s_info.get("contacter"), s_info.get("factoryAddress"), s_info.get("marketInfo"), item.get("shopName")):
+            if _contains_cjk(sf):
+                cjk_inputs.add(str(sf).strip())
+
+        for spec in ext_list:
+            for s_val in (spec.get("name") or spec.get("pvalue"), spec.get("value") or spec.get("cvalue")):
+                if _contains_cjk(s_val):
+                    cjk_inputs.add(str(s_val).strip())
+
+        for sku in sku_list:
+            for s_val in (sku.get("specificationNameOne"), sku.get("specificationNameTwo")):
+                if _contains_cjk(s_val):
+                    cjk_inputs.add(str(s_val).strip())
+
+    if cjk_inputs:
+        _translate_many(list(cjk_inputs), dest="en")
+
+    # Phase 2: If French translation is enabled, collect all strings needing French translation
+    if translate_enabled:
+        fr_inputs = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            pid = str(item.get("id") or "")
+            d_data = detail_map.get(pid) or (item if "detail" in item else {})
+            d_sec = d_data.get("detail") or {}
+            d_vo = d_sec.get("productDetailVO") or item.get("productDetailVO") or {}
+            ext_list = d_sec.get("productExtendList") or d_data.get("propertyList") or []
+            sku_list = d_sec.get("productPropertySkuBoList") or item.get("productPropertySkuBoList") or []
+
+            raw_title = (d_vo.get("title") or item.get("title") or "").strip()
+            if raw_title:
+                fr_inputs.add(raw_title)
+                en_title = _translate_to_english(raw_title, enabled=True)
+                if en_title:
+                    fr_inputs.add(en_title)
+
+            raw_desc = d_vo.get("detaill") or item.get("description")
+            desc = _clean_description_text(raw_desc)
+            if desc:
+                en_desc = _translate_to_english(desc, enabled=True)
+                if en_desc:
+                    fr_inputs.add(en_desc)
+
+            for spec in ext_list:
+                raw_k = (spec.get("name") or spec.get("pvalue") or "").strip()
+                raw_v = (spec.get("value") or spec.get("cvalue") or "").strip()
+                if raw_k:
+                    fr_inputs.add(_translate_to_english(raw_k, enabled=True))
+                if raw_v:
+                    fr_inputs.add(_translate_to_english(raw_v, enabled=True))
+
+            for sku in sku_list:
+                raw_m = (sku.get("specificationNameOne") or "").strip()
+                raw_v = (sku.get("specificationNameTwo") or "").strip()
+                if raw_m:
+                    fr_inputs.add(_translate_to_english(raw_m, enabled=True))
+                if raw_v:
+                    fr_inputs.add(_translate_to_english(raw_v, enabled=True))
+
+        if fr_inputs:
+            _translate_many(list(fr_inputs), dest="fr")
 
 
 def _process_yuwi_go_items(
@@ -2250,7 +2328,7 @@ def _process_yuwi_go_items(
             product_code__in=candidate_codes,
             is_deleted=False,
         ).only(
-            "id", "product_code", "product_name", "product_image_1",
+            "id", "product_code", "product_name", "product_name_french", "product_image_1",
             "length", "width", "height", "weight",
             "carton_length", "carton_width", "carton_height", "carton_weight",
         )
@@ -2271,8 +2349,8 @@ def _process_yuwi_go_items(
                     ep.length, ep.width, ep.height, ep.weight,
                     ep.carton_length, ep.carton_width, ep.carton_height, ep.carton_weight,
                 ])
-                has_proper_name = not str(ep.product_name or "").startswith("Yiwugo Product")
-                if has_direct_img and has_all_dims and has_proper_name:
+                has_french = bool(ep.product_name_french and not _contains_cjk(ep.product_name_french))
+                if has_direct_img and has_all_dims and has_french:
                     skipped_products.append({
                         "source_id": item_id,
                         "product_name": ep.product_name,
@@ -2284,16 +2362,7 @@ def _process_yuwi_go_items(
     if not items_to_process:
         return created_products, skipped_products, failed_products
 
-    # Step 2: Translate titles ONLY for new / incomplete items
-    raw_batch_titles = [
-        item.get("title")
-        for item in items_to_process
-        if isinstance(item, dict) and _contains_cjk(item.get("title"))
-    ]
-    if translate_enabled and raw_batch_titles:
-        _translate_many(raw_batch_titles, dest="en")
-
-    # Step 3: Concurrent pre-fetch of details ONLY for new / incomplete items
+    # Step 2: Concurrent pre-fetch of details ONLY for new / incomplete items
     detail_map = {}
     prefetched_ids = set()
     if access_token and fetch_detail:
@@ -2309,152 +2378,148 @@ def _process_yuwi_go_items(
                     return pid, _fetch_yiwugo_product_detail(pid, access_token=active_token, is_oauth_token=is_oauth_token)
                 except Exception:
                     return pid, None
-            with ThreadPoolExecutor(max_workers=min(6, len(ids_to_fetch))) as pool:
-                futures = {pool.submit(_fetch_one_detail, pid): pid for pid in ids_to_fetch}
-                done, _ = concurrent.futures.wait(futures.keys(), timeout=12)
-                for f in done:
-                    try:
-                        pid, d_data = f.result()
-                        prefetched_ids.add(str(pid))
-                        if d_data:
-                            detail_map[str(pid)] = d_data
-                    except Exception:
-                        pass
+            with ThreadPoolExecutor(max_workers=min(12, len(ids_to_fetch))) as pool:
+                for pid, d_data in pool.map(_fetch_one_detail, ids_to_fetch):
+                    prefetched_ids.add(str(pid))
+                    if d_data:
+                        detail_map[str(pid)] = d_data
 
-    for item in items_to_process:
-        source_id = item.get("id") if isinstance(item, dict) else None
-        detail_data = None
-        if access_token and source_id and not item.get("detail_data"):
-            detail_data = detail_map.get(str(source_id))
-            if not detail_data and fetch_detail and str(source_id) not in prefetched_ids:
-                active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
-                detail_data = _fetch_yiwugo_product_detail(
-                    source_id,
-                    access_token=active_token,
-                    is_oauth_token=is_oauth_token,
-                )
-        elif doc_detail_example:
-            doc_vo_id = (doc_detail_example.get("detail") or {}).get("productDetailVO", {}).get("id")
-            if doc_vo_id and str(doc_vo_id) == str(source_id):
-                detail_data = doc_detail_example
+    # Step 3: Page-level bulk pre-translation across all items (En & Fr) upfront
+    _pretranslate_page_items(items_to_process, detail_map, translate_enabled=translate_enabled)
 
-        normalized = _extract_product_payload(item, detail_data=detail_data, translate_enabled=translate_enabled)
-        product_name = normalized["title"]
-
-        if not product_name:
-            skipped_products.append({
-                "source_id": normalized["source_id"],
-                "product_name": "",
-                "reason": "Missing product title",
-            })
-            continue
-
-        # Duplicate check: matches either product_name or product_code
-        dup_query = Q(product_name__iexact=product_name)
-        if normalized.get("goods_code"):
-            dup_query |= Q(product_code=f"YWG_{normalized['goods_code']}")
-        if normalized.get("source_id"):
-            dup_query |= Q(product_code=f"YWG_{normalized['source_id']}")
-
-        existing_product = models.ProductDetail.objects.filter(
-            Q(product_added_from=YUWI_GO_SOURCE) | Q(product_added_from="yiwu_go"),
-            dup_query,
-            is_deleted=False,
-        ).first()
-        if existing_product:
-            updated_fields = []
-            # Fill any missing dimensions and carton parameters
-            p_len = existing_product.length or normalized.get("length") or normalized.get("carton_length") or "10"
-            p_wid = existing_product.width or normalized.get("width") or normalized.get("carton_width") or "10"
-            p_hei = existing_product.height or normalized.get("height") or normalized.get("carton_height") or "5"
-            p_wei = existing_product.weight or normalized.get("weight") or normalized.get("carton_weight") or "0.5"
-            c_len = existing_product.carton_length or normalized.get("carton_length") or p_len
-            c_wid = existing_product.carton_width or normalized.get("carton_width") or p_wid
-            c_hei = existing_product.carton_height or normalized.get("carton_height") or p_hei
-            c_wei = existing_product.carton_weight or normalized.get("carton_weight") or p_wei
-
-            for attr, val in [
-                ("length", p_len), ("width", p_wid), ("height", p_hei), ("weight", p_wei),
-                ("carton_length", c_len), ("carton_width", c_wid), ("carton_height", c_hei), ("carton_weight", c_wei),
-            ]:
-                if not getattr(existing_product, attr):
-                    setattr(existing_product, attr, val)
-                    updated_fields.append(attr)
-
-            # If existing product has dummy "Yiwugo Product <id>" name or Chinese characters, update to proper name
-            has_dummy_or_cjk = (
-                str(existing_product.product_name or "").startswith("Yiwugo Product")
-                or _contains_cjk(existing_product.product_name)
-                or _contains_cjk(existing_product.product_name_french)
-            )
-            if has_dummy_or_cjk and product_name and not product_name.startswith("Yiwugo Product") and not _contains_cjk(product_name):
-                existing_product.product_name = product_name
-                updated_fields.append("product_name")
-                prod_fr = _translate_to_french(product_name, enabled=translate_enabled)
-                if not prod_fr or _contains_cjk(prod_fr) or prod_fr.startswith("Yiwugo Product"):
-                    prod_fr = product_name
-                existing_product.product_name_french = prod_fr
-                updated_fields.append("product_name_french")
-
-                if (str(existing_product.description or "").startswith("Yiwugo Product") or _contains_cjk(existing_product.description)) and normalized.get("description"):
-                    existing_product.description = normalized["description"]
-                    updated_fields.append("description")
-                    desc_fr = _translate_to_french(normalized["description"], enabled=translate_enabled)
-                    if not desc_fr or _contains_cjk(desc_fr):
-                        desc_fr = normalized["description"]
-                    existing_product.description_french = desc_fr
-                    updated_fields.append("description_french")
-
-            # If existing product is missing images or has S3 paths, update to direct Yiwugo URLs
-            img1_val = str(existing_product.product_image_1 or "")
-            if (not img1_val or img1_val.startswith("image/product/image/")) and normalized.get("image_urls"):
-                for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
-                    if url:
-                        setattr(existing_product, f"product_image_{idx}", str(url).strip())
-                        if f"product_image_{idx}" not in updated_fields:
-                            updated_fields.append(f"product_image_{idx}")
-
-            if updated_fields:
-                existing_product._skip_faiss_refresh = True
-                existing_product.save(update_fields=updated_fields)
-                # Also update ProductImage gallery records and models
-                for fld in [f for f in updated_fields if f.startswith("product_image_")]:
-                    img_f = getattr(existing_product, fld, None)
-                    img_val = img_f.name if hasattr(img_f, "name") else str(img_f)
-                    if img_val and not models.ProductImage.objects.filter(product=existing_product, image=img_val).exists():
-                        models.ProductImage.objects.create(product=existing_product, image=img_val)
-                if existing_product.product_image_1:
-                    p1_val = existing_product.product_image_1.name if hasattr(existing_product.product_image_1, "name") else str(existing_product.product_image_1)
-                    models.ProductModel.objects.filter(
-                        Q(model_image__isnull=True) | Q(model_image="") | Q(model_image__startswith="image/"),
-                        product=existing_product,
-                    ).update(model_image=p1_val)
-                    models.ProductModelVariant.objects.filter(
-                        Q(image__isnull=True) | Q(image="") | Q(image__startswith="image/"),
-                        product=existing_product,
-                    ).update(image=p1_val)
-
-                created_products.append({
-                    "id": existing_product.id,
-                    "source_id": normalized["source_id"],
-                    "product_name": existing_product.product_name,
-                    "product_code": existing_product.product_code,
-                    "price_cny": normalized["raw_price_cny"],
-                    "price_usd": existing_product.price,
-                    "status": existing_product.status,
-                    "product_added_from": existing_product.product_added_from,
-                    "action": "updated",
-                })
-                continue
-
-            skipped_products.append({
-                "source_id": normalized["source_id"],
-                "product_name": product_name,
-                "reason": f"Product already exists (id={existing_product.id}, code={existing_product.product_code})",
-            })
-            continue
-
+    # Step 4: Import each item (with ThreadPoolExecutor)
+    def _process_single_item(item):
+        close_old_connections()
         try:
+            source_id = item.get("id") if isinstance(item, dict) else None
+            detail_data = None
+            if access_token and source_id and not item.get("detail_data"):
+                detail_data = detail_map.get(str(source_id))
+                if not detail_data and fetch_detail and str(source_id) not in prefetched_ids:
+                    active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
+                    detail_data = _fetch_yiwugo_product_detail(
+                        source_id,
+                        access_token=active_token,
+                        is_oauth_token=is_oauth_token,
+                    )
+            elif doc_detail_example:
+                doc_vo_id = (doc_detail_example.get("detail") or {}).get("productDetailVO", {}).get("id")
+                if doc_vo_id and str(doc_vo_id) == str(source_id):
+                    detail_data = doc_detail_example
+
+            normalized = _extract_product_payload(item, detail_data=detail_data)
+            product_name = normalized["title"]
+
+            if not product_name:
+                return "skipped", {
+                    "source_id": normalized["source_id"],
+                    "product_name": "",
+                    "reason": "Missing product title",
+                }
+
+            # Duplicate check: matches either product_name or product_code
+            dup_query = Q(product_name__iexact=product_name)
+            if normalized.get("goods_code"):
+                dup_query |= Q(product_code=f"YWG_{normalized['goods_code']}")
+            if normalized.get("source_id"):
+                dup_query |= Q(product_code=f"YWG_{normalized['source_id']}")
+
+            existing_product = models.ProductDetail.objects.filter(
+                Q(product_added_from=YUWI_GO_SOURCE) | Q(product_added_from="yiwu_go"),
+                dup_query,
+                is_deleted=False,
+            ).first()
+            if existing_product:
+                updated_fields = []
+                # Fill any missing dimensions and carton parameters
+                p_len = existing_product.length or normalized.get("length") or normalized.get("carton_length") or "10"
+                p_wid = existing_product.width or normalized.get("width") or normalized.get("carton_width") or "10"
+                p_hei = existing_product.height or normalized.get("height") or normalized.get("carton_height") or "5"
+                p_wei = existing_product.weight or normalized.get("weight") or normalized.get("carton_weight") or "0.5"
+                c_len = existing_product.carton_length or normalized.get("carton_length") or p_len
+                c_wid = existing_product.carton_width or normalized.get("carton_width") or p_wid
+                c_hei = existing_product.carton_height or normalized.get("carton_height") or p_hei
+                c_wei = existing_product.carton_weight or normalized.get("carton_weight") or p_wei
+
+                for attr, val in [
+                    ("length", p_len), ("width", p_wid), ("height", p_hei), ("weight", p_wei),
+                    ("carton_length", c_len), ("carton_width", c_wid), ("carton_height", c_hei), ("carton_weight", c_wei),
+                ]:
+                    if not getattr(existing_product, attr):
+                        setattr(existing_product, attr, val)
+                        updated_fields.append(attr)
+
+                # If existing product is missing images or has S3 paths, update to direct Yiwugo URLs
+                img1_val = str(existing_product.product_image_1 or "")
+                if (not img1_val or img1_val.startswith("image/product/image/")) and normalized.get("image_urls"):
+                    for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
+                        if url:
+                            setattr(existing_product, f"product_image_{idx}", str(url).strip())
+                            if f"product_image_{idx}" not in updated_fields:
+                                updated_fields.append(f"product_image_{idx}")
+
+                # If existing product has CJK in English name, update with clean English title
+                if _contains_cjk(existing_product.product_name) and normalized.get("title") and not _contains_cjk(normalized["title"]):
+                    existing_product.product_name = normalized["title"]
+                    if "product_name" not in updated_fields:
+                        updated_fields.append("product_name")
+
+                # If existing product is missing French name or has CJK or same as English, update it to French
+                raw_t = normalized.get("raw_title")
+                needs_french_update = (
+                    not existing_product.product_name_french
+                    or _contains_cjk(existing_product.product_name_french)
+                    or (existing_product.product_name_french == existing_product.product_name and raw_t and _contains_cjk(raw_t))
+                )
+                if needs_french_update:
+                    fr_t = ""
+                    if raw_t and _contains_cjk(raw_t):
+                        fr_t = _translate_to_french(raw_t, enabled=translate_enabled)
+                    if not fr_t or _contains_cjk(fr_t):
+                        fr_t = _translate_to_french(existing_product.product_name, enabled=translate_enabled)
+                    if fr_t:
+                        existing_product.product_name_french = fr_t
+                        if "product_name_french" not in updated_fields:
+                            updated_fields.append("product_name_french")
+
+                if updated_fields:
+                    existing_product._skip_faiss_refresh = True
+                    existing_product.save(update_fields=updated_fields)
+                    # Also update ProductImage gallery records and models
+                    for fld in [f for f in updated_fields if f.startswith("product_image_")]:
+                        img_f = getattr(existing_product, fld, None)
+                        img_val = img_f.name if hasattr(img_f, "name") else str(img_f)
+                        if img_val and not models.ProductImage.objects.filter(product=existing_product, image=img_val).exists():
+                            models.ProductImage.objects.create(product=existing_product, image=img_val)
+                    if existing_product.product_image_1:
+                        p1_val = existing_product.product_image_1.name if hasattr(existing_product.product_image_1, "name") else str(existing_product.product_image_1)
+                        models.ProductModel.objects.filter(
+                            Q(model_image__isnull=True) | Q(model_image="") | Q(model_image__startswith="image/"),
+                            product=existing_product,
+                        ).update(model_image=p1_val)
+                        models.ProductModelVariant.objects.filter(
+                            Q(image__isnull=True) | Q(image="") | Q(image__startswith="image/"),
+                            product=existing_product,
+                        ).update(image=p1_val)
+
+                    return "created", {
+                        "id": existing_product.id,
+                        "source_id": normalized["source_id"],
+                        "product_name": existing_product.product_name,
+                        "product_code": existing_product.product_code,
+                        "price_cny": normalized["raw_price_cny"],
+                        "price_usd": existing_product.price,
+                        "status": existing_product.status,
+                        "product_added_from": existing_product.product_added_from,
+                        "action": "images_backfilled",
+                    }
+
+                return "skipped", {
+                    "source_id": normalized["source_id"],
+                    "product_name": product_name,
+                    "reason": f"Product already exists (id={existing_product.id}, code={existing_product.product_code})",
+                }
+
             product = _import_single_yuwi_go_product(
                 normalized=normalized,
                 cny_rate=cny_rate,
@@ -2465,7 +2530,7 @@ def _process_yuwi_go_items(
                 translate_enabled=translate_enabled,
                 download_images=download_images,
             )
-            created_products.append({
+            return "created", {
                 "id": product.id,
                 "source_id": normalized["source_id"],
                 "product_name": product.product_name,
@@ -2476,13 +2541,36 @@ def _process_yuwi_go_items(
                 "price_usd": product.price,
                 "status": product.status,
                 "product_added_from": product.product_added_from,
-            })
+            }
         except Exception as exc:
-            failed_products.append({
-                "source_id": normalized["source_id"],
-                "product_name": product_name,
+            return "failed", {
+                "source_id": normalized.get("source_id") if "normalized" in locals() else item.get("id"),
+                "product_name": product_name if "product_name" in locals() else "",
                 "reason": str(exc),
-            })
+            }
+        finally:
+            close_old_connections()
+
+    # Process items with ThreadPoolExecutor (up to 5 workers for parallel DB inserts)
+    worker_count = min(5, len(items_to_process))
+    if worker_count > 1:
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            for outcome, data in pool.map(_process_single_item, items_to_process):
+                if outcome == "created":
+                    created_products.append(data)
+                elif outcome == "skipped":
+                    skipped_products.append(data)
+                else:
+                    failed_products.append(data)
+    else:
+        for item in items_to_process:
+            outcome, data = _process_single_item(item)
+            if outcome == "created":
+                created_products.append(data)
+            elif outcome == "skipped":
+                skipped_products.append(data)
+            else:
+                failed_products.append(data)
 
     return created_products, skipped_products, failed_products
 
@@ -2497,7 +2585,7 @@ def _run_yuwi_go_full_job(
     translate_enabled=True,
     fetch_detail=True,
     start_page=1,
-    page_size=20,
+    page_size=60,
     search_query="",
 ):
     """
@@ -2522,28 +2610,13 @@ def _run_yuwi_go_full_job(
         with YUWI_GO_JOBS_LOCK:
             YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "running"
 
-        try:
-            first_page_data = _fetch_yiwugo_live_page(
-                access_token=access_token,
-                page=start_page,
-                page_size=page_size,
-                search_query=search_query,
-                is_oauth_token=is_oauth_token,
-            )
-        except Exception as first_err:
-            refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
-            if refreshed:
-                access_token = refreshed
-                is_oauth_token = True
-                first_page_data = _fetch_yiwugo_live_page(
-                    access_token=access_token,
-                    page=start_page,
-                    page_size=page_size,
-                    search_query=search_query,
-                    is_oauth_token=True,
-                )
-            else:
-                raise first_err
+        first_page_data = _fetch_yiwugo_live_page(
+            access_token=access_token,
+            page=start_page,
+            page_size=page_size,
+            search_query=search_query,
+            is_oauth_token=is_oauth_token,
+        )
         total_found = first_page_data.get("numfound") or len(first_page_data.get("prslist") or [])
         if isinstance(total_found, str):
             total_found = int(total_found) if total_found.isdigit() else 0
@@ -2841,7 +2914,7 @@ def import_yuwi_go_products(request):
 
     if not (isinstance(incoming_products, list) and incoming_products) and run_background:
         start_page = max(1, int(params.get("start_page") or params.get("page") or params.get("cpage") or 1))
-        page_size = min(60, max(1, int(params.get("page_size") or params.get("pageSize") or 20)))
+        page_size = min(60, max(1, int(params.get("page_size") or params.get("pageSize") or 60)))
         search_query = params.get("q") or params.get("query") or ""
 
         job_id = uuid.uuid4().hex[:12]
