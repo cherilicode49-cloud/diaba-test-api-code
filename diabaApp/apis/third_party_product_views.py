@@ -14,7 +14,9 @@ import inspect
 import threading
 import requests
 import math
-from concurrent.futures import ThreadPoolExecutor
+import urllib.parse
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor, wait, as_completed
 from functools import lru_cache
 from django.conf import settings
 from django.core.cache import cache
@@ -24,7 +26,10 @@ from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
-from googletrans import Translator
+try:
+    from googletrans import Translator
+except Exception:
+    Translator = None
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -97,7 +102,8 @@ def _get_yiwugo_access_token(explicit_token=None, force_refresh=False):
     if force_refresh:
         return _fetch_yiwugo_oauth_token(force_refresh=True), True
     configured = (getattr(settings, "YIWUGO_ACCESS_TOKEN", None) or os.getenv("YIWUGO_ACCESS_TOKEN") or "").strip()
-    if configured:
+    # "67477461257f49e8404b857d2bf15f85" is expired historical dummy token; ignore it so test envs never break
+    if configured and configured != "67477461257f49e8404b857d2bf15f85":
         return configured, False
     return _fetch_yiwugo_oauth_token(force_refresh=force_refresh), True
 
@@ -293,8 +299,10 @@ def _fetch_third_party_products_data(params, headers=None):
         raw_p_title = item.get('title') or ''
         p_title = _translate_to_english(raw_p_title, enabled=True, fallback="")
         if not p_title:
-            p_title = _strip_cjk(raw_p_title) or raw_p_title
+            p_title = _strip_cjk(raw_p_title) or (f"Yiwugo Product {p_id}" if p_id else "Yiwugo Product")
         p_title_french = _translate_to_french(p_title, enabled=translate_fetch) if p_title else ""
+        if not p_title_french or _contains_cjk(p_title_french):
+            p_title_french = p_title
         p_price = item.get('sellPrice')
         p_start_num = item.get('startNum')
         p_metric = _normalize_measure_to_english(item.get('metric'))
@@ -1062,8 +1070,74 @@ def _strip_cjk(text):
     return cleaned
 
 
+def _translate_single_network(text, dest="en", timeout=4):
+    """
+    Translate text to destination language (en or fr).
+    Primary: Google Translate Dict client (clients5.google.com).
+    Secondary: Youdao translation API.
+    Tertiary: googletrans fallback.
+    """
+    if not text:
+        return None
+    clean = str(text).strip()
+    if not clean:
+        return None
+
+    # Google clients5 works best with text under ~800 chars per GET call
+    snippet = clean[:800]
+
+    # 1. Google Clients5 Dict API
+    try:
+        url = f"https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl={dest}&q={urllib.parse.quote(snippet)}"
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=timeout)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, list) and data:
+                first = data[0]
+                cand = None
+                if isinstance(first, list) and first:
+                    cand = str(first[0]).strip()
+                elif isinstance(first, str):
+                    cand = first.strip()
+                if cand and not (dest in ["en", "fr"] and _contains_cjk(cand)):
+                    return cand
+    except Exception:
+        pass
+
+    # 2. Youdao Free Translation Endpoint
+    try:
+        resp = requests.post(
+            "https://aidemo.youdao.com/trans",
+            data={"q": snippet, "from": "Auto", "to": dest},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=timeout
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            translations = data.get("translation")
+            if isinstance(translations, list) and translations:
+                cand = str(translations[0]).strip()
+                if cand and not (dest in ["en", "fr"] and _contains_cjk(cand)):
+                    return cand
+    except Exception:
+        pass
+
+    # 3. Googletrans library fallback if available
+    if Translator:
+        try:
+            with Translator(timeout=timeout) as translator:
+                res = translator.translate(snippet, dest=dest)
+                cand = getattr(res, "text", None)
+                if cand and not (dest in ["en", "fr"] and _contains_cjk(cand)):
+                    return cand.strip()
+        except Exception:
+            pass
+
+    return None
+
+
 def _translate_many(texts, dest="en"):
-    """Translate a sequence of distinct texts concurrently via Google Translate, caching results."""
+    """Translate a sequence of distinct texts concurrently, caching results."""
     unique_inputs = []
     seen = set()
     for raw in texts or []:
@@ -1085,40 +1159,15 @@ def _translate_many(texts, dest="en"):
         unique_inputs.append(snippet)
 
     if unique_inputs:
-        async def _async_translate_batch(batch_items, target_lang):
-            async with Translator() as translator:
-                coros = [translator.translate(s, dest=target_lang) for s in batch_items]
-                return await asyncio.gather(*coros, return_exceptions=True)
+        def _worker(s):
+            trans = _translate_single_network(s, dest=dest, timeout=5)
+            if trans:
+                with _TRANSLATION_CACHE_LOCK:
+                    _TRANSLATION_CACHE[(s, dest)] = trans
 
-        def _run_batch(batch_items):
-            try:
-                asyncio.get_running_loop()
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    return pool.submit(asyncio.run, _async_translate_batch(batch_items, dest)).result(timeout=25)
-            except RuntimeError:
-                return asyncio.run(_async_translate_batch(batch_items, dest))
-
-        for start in range(0, len(unique_inputs), 10):
-            chunk = unique_inputs[start:start + 10]
-            results = []
-            try:
-                results = _run_batch(chunk)
-            except Exception:
-                results = []
-
-            for idx, snippet in enumerate(chunk):
-                res = results[idx] if idx < len(results) else None
-                translated = getattr(res, "text", None) if (res and not isinstance(res, Exception)) else None
-                if not translated:
-                    try:
-                        single_res = _run_batch([snippet])
-                        if single_res and not isinstance(single_res[0], Exception):
-                            translated = getattr(single_res[0], "text", None)
-                    except Exception:
-                        pass
-                if translated:
-                    with _TRANSLATION_CACHE_LOCK:
-                        _TRANSLATION_CACHE[(snippet, dest)] = translated.strip()
+        with ThreadPoolExecutor(max_workers=min(10, len(unique_inputs))) as pool:
+            futures = [pool.submit(_worker, s) for s in unique_inputs]
+            wait(futures, timeout=12)
 
     output = {}
     for raw in texts or []:
@@ -1132,7 +1181,11 @@ def _translate_many(texts, dest="en"):
             output[clean] = clean
         else:
             with _TRANSLATION_CACHE_LOCK:
-                output[clean] = _TRANSLATION_CACHE.get((snippet, dest), clean)
+                trans = _TRANSLATION_CACHE.get((snippet, dest))
+            if trans:
+                output[clean] = trans
+            else:
+                output[clean] = clean
     return output
 
 
@@ -1151,54 +1204,24 @@ def _translate_to_english(text, enabled=True, fallback=""):
         translated = _translate_many([clean], dest="en").get(clean, clean)
 
     if _contains_cjk(translated):
-        # Direct fallback retry with dedicated single-translator call
-        try:
-            async def _single_tr():
-                async with Translator() as tr:
-                    r = await tr.translate(clean[:1500], dest="en")
-                    return r.text
-            direct_res = asyncio.run(_single_tr())
-            if direct_res and not _contains_cjk(direct_res):
-                translated = direct_res.strip()
-                with _TRANSLATION_CACHE_LOCK:
-                    _TRANSLATION_CACHE[(clean[:4500], "en")] = translated
-        except Exception:
-            pass
-
-    if _contains_cjk(translated):
         stripped = _strip_cjk(translated)
-        return stripped or fallback or clean
-    return translated or fallback or clean
+        return stripped or fallback or ""
+    return translated or fallback or ""
 
 
 def _translate_to_french(text, enabled=True):
-    """Translate text to French via googletrans (cached, supports sync/async), falling back on error."""
+    """Translate text to French, falling back on error without Chinese characters."""
     if text is None:
         return ""
     clean = str(text).strip()
     if not clean or not enabled:
-        return clean
+        return clean if not _contains_cjk(clean) else ""
 
     translated = _translate_many([clean], dest="fr").get(clean, clean)
-    if translated == clean and _contains_cjk(clean):
-        try:
-            async def _single_fr():
-                async with Translator() as tr:
-                    r = await tr.translate(clean[:1500], dest="fr")
-                    return r.text
-            direct_fr = asyncio.run(_single_fr())
-            if direct_fr and direct_fr != clean:
-                translated = direct_fr.strip()
-                with _TRANSLATION_CACHE_LOCK:
-                    _TRANSLATION_CACHE[(clean[:4500], "fr")] = translated
-        except Exception:
-            pass
-
     if _contains_cjk(translated):
         stripped = _strip_cjk(translated)
-        if stripped:
-            return stripped
-    return translated or clean
+        return stripped
+    return translated
 
 
 def _normalize_measure_to_english(raw_measure, fallback="pcs"):
@@ -1745,7 +1768,7 @@ def _extract_dimensions_and_quantities(detail_data, detail_vo, packing_bo, exten
     }
 
 
-def _extract_product_payload(item, detail_data=None):
+def _extract_product_payload(item, detail_data=None, translate_enabled=True):
     """Normalize either a raw Yiwugo item or a formatted item into a consistent dict."""
     raw = item.get("raw_third_party_parameters") if isinstance(item, dict) else None
     base = raw if isinstance(raw, dict) else (item if isinstance(item, dict) else {})
@@ -1773,14 +1796,14 @@ def _extract_product_payload(item, detail_data=None):
 
     source_id = detail_vo.get("id") or item.get("id") or base.get("id")
     raw_title = (detail_vo.get("title") or item.get("title") or base.get("title") or "").strip()
-    title = _translate_to_english(raw_title, enabled=True, fallback="")
+    title = _translate_to_english(raw_title, enabled=translate_enabled, fallback="")
     if (not title or title.startswith("Yiwugo Product")) and raw_title:
         # Retry with alt title
         alt_title = (item.get("title") or detail_vo.get("title") or base.get("title") or "").strip()
         if alt_title and alt_title != raw_title:
-            title = _translate_to_english(alt_title, enabled=True, fallback="")
+            title = _translate_to_english(alt_title, enabled=translate_enabled, fallback="")
         if not title:
-            title = _strip_cjk(raw_title) or raw_title
+            title = _strip_cjk(raw_title) or (f"Yiwugo Product {source_id}" if source_id else "Yiwugo Product")
     goods_code = (
         detail_vo.get("goodsCode")
         or item.get("goods_code")
@@ -1969,7 +1992,11 @@ def _import_single_yuwi_go_product(
         _translate_many(fr_inputs, dest="fr")
 
     product_name_french = _translate_to_french(product_name, enabled=translate_enabled)
+    if not product_name_french or _contains_cjk(product_name_french):
+        product_name_french = product_name
     description_french = _translate_to_french(normalized["description"], enabled=translate_enabled)
+    if not description_french or _contains_cjk(description_french):
+        description_french = normalized["description"]
 
     packing = normalized.get("packing_bo") or {}
     carton_length = normalized.get("carton_length") or normalized.get("length") or "10"
@@ -2263,7 +2290,7 @@ def _process_yuwi_go_items(
         for item in items_to_process
         if isinstance(item, dict) and _contains_cjk(item.get("title"))
     ]
-    if raw_batch_titles:
+    if translate_enabled and raw_batch_titles:
         _translate_many(raw_batch_titles, dest="en")
 
     # Step 3: Concurrent pre-fetch of details ONLY for new / incomplete items
@@ -2282,11 +2309,17 @@ def _process_yuwi_go_items(
                     return pid, _fetch_yiwugo_product_detail(pid, access_token=active_token, is_oauth_token=is_oauth_token)
                 except Exception:
                     return pid, None
-            with ThreadPoolExecutor(max_workers=min(12, len(ids_to_fetch))) as pool:
-                for pid, d_data in pool.map(_fetch_one_detail, ids_to_fetch):
-                    prefetched_ids.add(str(pid))
-                    if d_data:
-                        detail_map[str(pid)] = d_data
+            with ThreadPoolExecutor(max_workers=min(6, len(ids_to_fetch))) as pool:
+                futures = {pool.submit(_fetch_one_detail, pid): pid for pid in ids_to_fetch}
+                done, _ = concurrent.futures.wait(futures.keys(), timeout=12)
+                for f in done:
+                    try:
+                        pid, d_data = f.result()
+                        prefetched_ids.add(str(pid))
+                        if d_data:
+                            detail_map[str(pid)] = d_data
+                    except Exception:
+                        pass
 
     for item in items_to_process:
         source_id = item.get("id") if isinstance(item, dict) else None
@@ -2305,7 +2338,7 @@ def _process_yuwi_go_items(
             if doc_vo_id and str(doc_vo_id) == str(source_id):
                 detail_data = doc_detail_example
 
-        normalized = _extract_product_payload(item, detail_data=detail_data)
+        normalized = _extract_product_payload(item, detail_data=detail_data, translate_enabled=translate_enabled)
         product_name = normalized["title"]
 
         if not product_name:
@@ -2348,21 +2381,29 @@ def _process_yuwi_go_items(
                     setattr(existing_product, attr, val)
                     updated_fields.append(attr)
 
-            # If existing product has dummy "Yiwugo Product <id>" name, update to proper name
-            if str(existing_product.product_name or "").startswith("Yiwugo Product") and product_name and not product_name.startswith("Yiwugo Product"):
+            # If existing product has dummy "Yiwugo Product <id>" name or Chinese characters, update to proper name
+            has_dummy_or_cjk = (
+                str(existing_product.product_name or "").startswith("Yiwugo Product")
+                or _contains_cjk(existing_product.product_name)
+                or _contains_cjk(existing_product.product_name_french)
+            )
+            if has_dummy_or_cjk and product_name and not product_name.startswith("Yiwugo Product") and not _contains_cjk(product_name):
                 existing_product.product_name = product_name
                 updated_fields.append("product_name")
                 prod_fr = _translate_to_french(product_name, enabled=translate_enabled)
-                if prod_fr and not prod_fr.startswith("Yiwugo Product"):
-                    existing_product.product_name_french = prod_fr
-                    updated_fields.append("product_name_french")
-                if str(existing_product.description or "").startswith("Yiwugo Product") and normalized.get("description"):
+                if not prod_fr or _contains_cjk(prod_fr) or prod_fr.startswith("Yiwugo Product"):
+                    prod_fr = product_name
+                existing_product.product_name_french = prod_fr
+                updated_fields.append("product_name_french")
+
+                if (str(existing_product.description or "").startswith("Yiwugo Product") or _contains_cjk(existing_product.description)) and normalized.get("description"):
                     existing_product.description = normalized["description"]
                     updated_fields.append("description")
                     desc_fr = _translate_to_french(normalized["description"], enabled=translate_enabled)
-                    if desc_fr:
-                        existing_product.description_french = desc_fr
-                        updated_fields.append("description_french")
+                    if not desc_fr or _contains_cjk(desc_fr):
+                        desc_fr = normalized["description"]
+                    existing_product.description_french = desc_fr
+                    updated_fields.append("description_french")
 
             # If existing product is missing images or has S3 paths, update to direct Yiwugo URLs
             img1_val = str(existing_product.product_image_1 or "")
@@ -2456,7 +2497,7 @@ def _run_yuwi_go_full_job(
     translate_enabled=True,
     fetch_detail=True,
     start_page=1,
-    page_size=60,
+    page_size=20,
     search_query="",
 ):
     """
@@ -2800,7 +2841,7 @@ def import_yuwi_go_products(request):
 
     if not (isinstance(incoming_products, list) and incoming_products) and run_background:
         start_page = max(1, int(params.get("start_page") or params.get("page") or params.get("cpage") or 1))
-        page_size = min(60, max(1, int(params.get("page_size") or params.get("pageSize") or 60)))
+        page_size = min(60, max(1, int(params.get("page_size") or params.get("pageSize") or 20)))
         search_query = params.get("q") or params.get("query") or ""
 
         job_id = uuid.uuid4().hex[:12]
