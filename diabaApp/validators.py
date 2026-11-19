@@ -28,7 +28,11 @@ def validate_file_extension_image(self):
         file size validation, file type validation, anf file extension validation"""
 
     import os
-    ext = os.path.splitext(self.name)[1]
+    file_name = getattr(self, "name", str(self))
+    if file_name and (str(file_name).startswith("http://") or str(file_name).startswith("https://")):
+        return self
+
+    ext = os.path.splitext(file_name)[1]
     valid_extensions = ['.jpg', '.jpeg', '.png', '.webp','.HEIF','.heic','.heif']
 
     # Checks whether the file has a valid extension.
@@ -36,7 +40,7 @@ def validate_file_extension_image(self):
         raise ValidationError('Unsupported file extension, please upload a file '
                               'with a valid extension, ie: jpg, jpeg, png, gif, webp ')
 
-    file_size = self.size
+    file_size = getattr(self, "size", 0)
 
     if file_size > 52428800:  # 1 MB
         raise ValidationError("File size should not be more than 1 MB.")

@@ -67,21 +67,21 @@ class ProductDetail(models.Model):
     quantity = models.CharField( verbose_name="quantity",  null=True)
     min_order_quantity = models.CharField( verbose_name="min_order_quantity",  null=True, blank=True)
     max_order_quantity = models.CharField( verbose_name="max_order_quantity",  null=True, blank=True)
-    product_image_1 = models.FileField(upload_to='image/product/image', verbose_name='product_image_1', null=True, blank=True,
+    product_image_1 = models.FileField(upload_to='image/product/image', verbose_name='product_image_1', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
-    product_image_2 = models.FileField(upload_to='image/product/image', verbose_name='product_image_2', null=True, blank=True,
+    product_image_2 = models.FileField(upload_to='image/product/image', verbose_name='product_image_2', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
-    product_image_3 = models.FileField(upload_to='image/product/image', verbose_name='product_image_3', null=True, blank=True,
+    product_image_3 = models.FileField(upload_to='image/product/image', verbose_name='product_image_3', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
-    product_image_4 = models.FileField(upload_to='image/product/image', verbose_name='product_image_4', null=True, blank=True,
+    product_image_4 = models.FileField(upload_to='image/product/image', verbose_name='product_image_4', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
-    product_image_5 = models.FileField(upload_to='image/product/image', verbose_name='product_image_5', null=True, blank=True,
+    product_image_5 = models.FileField(upload_to='image/product/image', verbose_name='product_image_5', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
-    product_image_6 = models.FileField(upload_to='image/product/image', verbose_name='product_image_6', null=True, blank=True,
+    product_image_6 = models.FileField(upload_to='image/product/image', verbose_name='product_image_6', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
-    product_image_7 = models.FileField(upload_to='image/product/image', verbose_name='product_image_7', null=True, blank=True,
+    product_image_7 = models.FileField(upload_to='image/product/image', verbose_name='product_image_7', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
-    product_image_8 = models.FileField(upload_to='image/product/image', verbose_name='product_image_8', null=True, blank=True,
+    product_image_8 = models.FileField(upload_to='image/product/image', verbose_name='product_image_8', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
     product_video = models.FileField(upload_to='image/product/video', verbose_name='product_video', null=True, blank=True,
                         validators=[validators.validate_file_extension_video])
@@ -119,7 +119,7 @@ class ProductDetail(models.Model):
 
 class ProductImage(models.Model):
     product = models.ForeignKey(ProductDetail, null=True,verbose_name="ProductDetail", on_delete=models.CASCADE)
-    image = models.FileField(upload_to='image/product/other/image', verbose_name='Model Image', null=True, blank=True,
+    image = models.FileField(upload_to='image/product/other/image', verbose_name='Model Image', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
 
     def __str__(self):
@@ -140,10 +140,10 @@ class ProductModel(models.Model):
     product = models.ForeignKey(ProductDetail, null=True,verbose_name="ProductDetail", on_delete=models.CASCADE)
     model_name = models.CharField(verbose_name="Model Name",  null=True)
     model_name_french = models.CharField(verbose_name="model_name_french",  null=True)
-    model_image = models.FileField(upload_to='image/model/image', verbose_name='Model Image', null=True, blank=True,
+    model_image = models.FileField(upload_to='image/model/image', verbose_name='Model Image', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
     status = models.CharField( verbose_name="status",  null=True, default='Active')
-    # is_deleted = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         return "%s" % str(self.id)+'--->productDEtail----->'+str(self.product)
@@ -153,12 +153,12 @@ class ProductModelVariant(models.Model):
     model = models.ForeignKey(ProductModel, null=True,verbose_name="Product Model", on_delete=models.CASCADE)
     name = models.CharField( verbose_name="Variant Name",  null=True)
     name_french = models.CharField( verbose_name="Variant_french",  null=True)
-    image = models.FileField(upload_to='image/variant/image', verbose_name='Variant Image', null=True, blank=True,
+    image = models.FileField(upload_to='image/variant/image', verbose_name='Variant Image', null=True, blank=True, max_length=500,
                         validators=[validators.validate_file_extension_image])
     price = models.CharField( verbose_name="Variant Price",  null=True, blank=True)
     variant_verification = models.CharField( verbose_name="variant_verification",  null=True, default='Approved')
     status = models.CharField( verbose_name="status",  null=True, default='Active')
-    # is_deleted = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
 
     def __str__(self):
         return "%s" % str(self.id)+'--->MOdel detail----->'+str(self.model)

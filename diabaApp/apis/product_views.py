@@ -5768,7 +5768,7 @@ def variant_update(request):
         name_french = python_data.get('variant_name_french')
         image = python_data.get('image')
         price = python_data.get('price')
-
+        print(python_data, 'python_data')
         if models.ProductModelVariant.objects.filter(id = id):
             get_variant = models.ProductModelVariant.objects.get(id = id)
             get_variant.name = name

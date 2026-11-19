@@ -1,10 +1,14 @@
 import os
 import re
+import time
 import html
 import uuid
 import json
 import base64
 import random
+import logging
+
+logger = logging.getLogger(__name__)
 import asyncio
 import inspect
 import threading
@@ -60,24 +64,29 @@ def _fetch_yiwugo_oauth_token(force_refresh=False):
 
     raw_creds = f"{client_id}:{client_secret}".encode("utf-8")
     auth_header = base64.b64encode(raw_creds).decode("ascii")
-    try:
-        resp = requests.post(
-            "https://open.yiwugo.com/oauth/token",
-            params={"grant_type": "client_credentials", "client_id": client_id},
-            headers={"Authorization": auth_header},
-            timeout=15,
-            verify=False,
-        )
-        resp_json = resp.json()
-        if resp_json.get("code") == 0:
-            data = resp_json.get("data") or {}
-            token = data.get("accessToken")
-            expires_in = int(data.get("expiresIn") or 20000)
-            if token:
-                cache.set(YIWUGO_TOKEN_CACHE_KEY, token, max(60, expires_in - 300))
-                return token
-    except Exception:
-        pass
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                "https://open.yiwugo.com/oauth/token",
+                params={"grant_type": "client_credentials", "client_id": client_id},
+                headers={"Authorization": auth_header},
+                timeout=25,
+                verify=False,
+            )
+            resp_json = resp.json()
+            if resp_json.get("code") == 0:
+                data = resp_json.get("data") or {}
+                token = data.get("accessToken")
+                expires_in = int(data.get("expiresIn") or 20000)
+                if token:
+                    cache.set(YIWUGO_TOKEN_CACHE_KEY, token, max(60, expires_in - 300))
+                    return token
+        except Exception as e:
+            last_err = e
+            time.sleep(1)
+    if last_err:
+        logger.warning(f"Yiwugo OAuth token request failed after 3 attempts: {last_err}")
     return None
 
 
@@ -1623,8 +1632,32 @@ def _extract_dimensions_and_quantities(detail_data, detail_vo, packing_bo, exten
             if m and not height:
                 height = m.group(1)
 
-    if not carton_weight and weight:
-        carton_weight = weight
+    # Cross-fallback between item dimensions and carton dimensions
+    carton_length = carton_length or length
+    carton_width = carton_width or width
+    carton_height = carton_height or height
+    carton_weight = carton_weight or weight
+
+    length = length or carton_length
+    width = width or carton_width
+    height = height or carton_height
+    weight = weight or carton_weight
+
+    # 2D fallback: if length & width exist but height is missing, use default 5cm thickness
+    if length and width and not height:
+        height = "5"
+        carton_height = carton_height or "5"
+
+    # Complete fallbacks if vendor provided no dimensions at all
+    length = length or "10"
+    width = width or "10"
+    height = height or "5"
+    weight = weight or "0.5"
+
+    carton_length = carton_length or length
+    carton_width = carton_width or width
+    carton_height = carton_height or height
+    carton_weight = carton_weight or weight
 
     min_order_qty = (
         detail_vo.get("startNumber")
@@ -1895,27 +1928,22 @@ def _import_single_yuwi_go_product(
     description_french = _translate_to_french(normalized["description"], enabled=translate_enabled)
 
     packing = normalized.get("packing_bo") or {}
-    carton_length = normalized.get("carton_length") or (str(packing.get("length")) if packing.get("length") not in [None, ""] else None)
-    carton_width = normalized.get("carton_width") or (str(packing.get("width")) if packing.get("width") not in [None, ""] else None)
-    carton_height = normalized.get("carton_height") or (str(packing.get("height")) if packing.get("height") not in [None, ""] else None)
-    carton_weight = normalized.get("carton_weight") or (str(packing.get("shippingWeight")) if packing.get("shippingWeight") not in [None, ""] else None)
+    carton_length = normalized.get("carton_length") or normalized.get("length") or "10"
+    carton_width = normalized.get("carton_width") or normalized.get("width") or "10"
+    carton_height = normalized.get("carton_height") or normalized.get("height") or "5"
+    carton_weight = normalized.get("carton_weight") or normalized.get("weight") or "0.5"
+
     prod_length = normalized.get("length") or carton_length
     prod_width = normalized.get("width") or carton_width
     prod_height = normalized.get("height") or carton_height
     prod_weight = normalized.get("weight") or carton_weight
-    packing_value = normalized.get("packing_quantity") or (str(packing.get("packingQuantity")) if packing.get("packingQuantity") not in [None, ""] else None)
+    packing_value = normalized.get("packing_quantity") or (str(packing.get("packingQuantity")) if packing.get("packingQuantity") not in [None, ""] else "1")
 
     image_kwargs = {}
-    if download_images:
-        urls_to_download = normalized["image_urls"][:5]
-        if urls_to_download:
-            def _fetch_img(idx_url):
-                idx, url = idx_url
-                return idx, _download_image_as_content_file(url, prefix=f"ywg_{idx}")
-            with ThreadPoolExecutor(max_workers=min(5, len(urls_to_download))) as pool:
-                for idx, img_file in pool.map(_fetch_img, enumerate(urls_to_download, start=1)):
-                    if img_file:
-                        image_kwargs[f"product_image_{idx}"] = img_file
+    # ALWAYS store direct image URLs (never upload to AWS S3)
+    for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
+        if url:
+            image_kwargs[f"product_image_{idx}"] = str(url).strip()
 
     with transaction.atomic():
         product = models.ProductDetail(
@@ -1969,6 +1997,17 @@ def _import_single_yuwi_go_product(
         if country_ids:
             product.available_country.set(country_ids)
 
+        # Create ProductImage gallery records for all product images
+        for idx in range(1, 9):
+            img_field = getattr(product, f"product_image_{idx}", None)
+            if img_field:
+                img_val = img_field.name if hasattr(img_field, "name") else str(img_field)
+                if img_val:
+                    models.ProductImage.objects.create(
+                        product_id=product.id,
+                        image=img_val,
+                    )
+
         for key, val in translated_specs:
             models.ProductOtherSpecification.objects.create(
                 product_id=product.id,
@@ -1979,23 +2018,30 @@ def _import_single_yuwi_go_product(
             )
 
         variant_prices = []
+        primary_image = getattr(product, "product_image_1", None)
+        primary_image_val = (primary_image.name if hasattr(primary_image, "name") else str(primary_image or "")) or primary_image
+
         if grouped_skus:
             for model_name, sku_pairs in grouped_skus.items():
+                first_sku = sku_pairs[0][1] if sku_pairs else {}
+                first_sku_pic = first_sku.get("picture") if first_sku else None
+                first_model_img = str(first_sku_pic).strip() if first_sku_pic else primary_image_val
+
                 model_obj = models.ProductModel.objects.create(
                     product_id=product.id,
                     model_name=model_name,
                     model_name_french=_translate_to_french(model_name, enabled=translate_enabled),
+                    model_image=first_model_img,
                     status="Active",
+                    is_deleted=False,
                 )
                 for variant_name, sku in sku_pairs:
                     sku_cny = sku.get("price") if sku.get("price") not in [None, "", "null"] else normalized["raw_price_cny"]
                     variant_price_usd = _convert_cny_to_usd(sku_cny, cny_rate)
                     variant_prices.append(variant_price_usd)
-                    variant_image = (
-                        _download_image_as_content_file(sku.get("picture"), prefix="ywg_var")
-                        if download_images and sku.get("picture")
-                        else None
-                    )
+                    sku_pic = sku.get("picture")
+                    variant_image = str(sku_pic).strip() if sku_pic else primary_image_val
+
                     variant_obj = models.ProductModelVariant.objects.create(
                         product_id=product.id,
                         model_id=model_obj.id,
@@ -2005,6 +2051,7 @@ def _import_single_yuwi_go_product(
                         price=str(variant_price_usd),
                         variant_verification="Approved",
                         status="Active",
+                        is_deleted=False,
                     )
                     if vendor_obj:
                         models.VendorProductPrice.objects.create(
@@ -2021,16 +2068,20 @@ def _import_single_yuwi_go_product(
                 product_id=product.id,
                 model_name=product_name,
                 model_name_french=product_name_french,
+                model_image=primary_image_val,
                 status="Active",
+                is_deleted=False,
             )
             variant_obj = models.ProductModelVariant.objects.create(
                 product_id=product.id,
                 model_id=model_obj.id,
                 name=product_name,
                 name_french=product_name_french,
+                image=primary_image_val,
                 price=str(price_usd),
                 variant_verification="Approved",
                 status="Active",
+                is_deleted=False,
             )
             if vendor_obj:
                 models.VendorProductPrice.objects.create(
@@ -2065,7 +2116,7 @@ def _fetch_yiwugo_live_page(access_token=None, page=1, page_size=20, search_quer
         resp = requests.get(
             "https://open.yiwugo.com/open/cn_product/list",
             params=live_params,
-            timeout=20,
+            timeout=35,
             verify=False,
         )
         resp_json = resp.json()
@@ -2101,21 +2152,70 @@ def _process_yuwi_go_items(
     skipped_products = []
     failed_products = []
 
+    # Step 1: Fast single-query DB check to skip already-complete products IMMEDIATELY
+    # (no Google Translate, no Yiwugo detail API calls for already-imported products!)
+    candidate_codes = [
+        f"YWG_{item.get('id')}"
+        for item in raw_items
+        if isinstance(item, dict) and item.get("id")
+    ]
+    existing_by_code = {}
+    if candidate_codes:
+        existing_qs = models.ProductDetail.objects.filter(
+            Q(product_added_from=YUWI_GO_SOURCE) | Q(product_added_from="yiwu_go"),
+            product_code__in=candidate_codes,
+            is_deleted=False,
+        ).only(
+            "id", "product_code", "product_name", "product_image_1",
+            "length", "width", "height", "weight",
+            "carton_length", "carton_width", "carton_height", "carton_weight",
+        )
+        for p in existing_qs:
+            existing_by_code[p.product_code] = p
+
+    items_to_process = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("id")
+        if item_id:
+            ep = existing_by_code.get(f"YWG_{item_id}")
+            if ep:
+                img1_val = str(ep.product_image_1 or "")
+                has_direct_img = img1_val.startswith("http://") or img1_val.startswith("https://")
+                has_all_dims = all([
+                    ep.length, ep.width, ep.height, ep.weight,
+                    ep.carton_length, ep.carton_width, ep.carton_height, ep.carton_weight,
+                ])
+                if has_direct_img and has_all_dims:
+                    skipped_products.append({
+                        "source_id": item_id,
+                        "product_name": ep.product_name,
+                        "reason": f"Product already exists (id={ep.id}, code={ep.product_code})",
+                    })
+                    continue
+        items_to_process.append(item)
+
+    if not items_to_process:
+        return created_products, skipped_products, failed_products
+
+    # Step 2: Translate titles ONLY for new / incomplete items
     raw_batch_titles = [
         item.get("title")
-        for item in raw_items
+        for item in items_to_process
         if isinstance(item, dict) and _contains_cjk(item.get("title"))
     ]
     if raw_batch_titles:
         _translate_many(raw_batch_titles, dest="en")
 
-    # Concurrent pre-fetch of all details for items in this batch
+    # Step 3: Concurrent pre-fetch of details ONLY for new / incomplete items
     detail_map = {}
+    prefetched_ids = set()
     if access_token and fetch_detail:
         ids_to_fetch = [
             item.get("id")
-            for item in raw_items
-            if isinstance(item, dict) and item.get("id") and not item.get("detail_data")
+            for item in items_to_process
+            if item.get("id") and not item.get("detail_data")
         ]
         if ids_to_fetch:
             active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
@@ -2126,15 +2226,16 @@ def _process_yuwi_go_items(
                     return pid, None
             with ThreadPoolExecutor(max_workers=min(12, len(ids_to_fetch))) as pool:
                 for pid, d_data in pool.map(_fetch_one_detail, ids_to_fetch):
+                    prefetched_ids.add(str(pid))
                     if d_data:
                         detail_map[str(pid)] = d_data
 
-    for item in raw_items:
+    for item in items_to_process:
         source_id = item.get("id") if isinstance(item, dict) else None
         detail_data = None
         if access_token and source_id and not item.get("detail_data"):
             detail_data = detail_map.get(str(source_id))
-            if not detail_data and fetch_detail:
+            if not detail_data and fetch_detail and str(source_id) not in prefetched_ids:
                 active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
                 detail_data = _fetch_yiwugo_product_detail(
                     source_id,
@@ -2157,28 +2258,67 @@ def _process_yuwi_go_items(
             })
             continue
 
-        # Duplicate check scoped strictly to product_added_from = 'yuwi_go'
+        # Duplicate check: matches either product_name or product_code
+        dup_query = Q(product_name__iexact=product_name)
+        if normalized.get("goods_code"):
+            dup_query |= Q(product_code=f"YWG_{normalized['goods_code']}")
+        if normalized.get("source_id"):
+            dup_query |= Q(product_code=f"YWG_{normalized['source_id']}")
+
         existing_product = models.ProductDetail.objects.filter(
-            product_added_from=YUWI_GO_SOURCE,
-            product_name__iexact=product_name,
+            Q(product_added_from=YUWI_GO_SOURCE) | Q(product_added_from="yiwu_go"),
+            dup_query,
             is_deleted=False,
         ).first()
         if existing_product:
-            # If the existing product is missing its primary image, backfill images
-            if download_images and not existing_product.product_image_1 and normalized.get("image_urls"):
-                urls_to_download = normalized["image_urls"][:5]
-                def _fetch_img(idx_url):
-                    idx, url = idx_url
-                    return idx, _download_image_as_content_file(url, prefix=f"ywg_{idx}")
-                updated_fields = []
-                with ThreadPoolExecutor(max_workers=min(5, len(urls_to_download))) as pool:
-                    for idx, img_file in pool.map(_fetch_img, enumerate(urls_to_download, start=1)):
-                        if img_file:
-                            setattr(existing_product, f"product_image_{idx}", img_file)
+            updated_fields = []
+            # Fill any missing dimensions and carton parameters
+            p_len = existing_product.length or normalized.get("length") or normalized.get("carton_length") or "10"
+            p_wid = existing_product.width or normalized.get("width") or normalized.get("carton_width") or "10"
+            p_hei = existing_product.height or normalized.get("height") or normalized.get("carton_height") or "5"
+            p_wei = existing_product.weight or normalized.get("weight") or normalized.get("carton_weight") or "0.5"
+            c_len = existing_product.carton_length or normalized.get("carton_length") or p_len
+            c_wid = existing_product.carton_width or normalized.get("carton_width") or p_wid
+            c_hei = existing_product.carton_height or normalized.get("carton_height") or p_hei
+            c_wei = existing_product.carton_weight or normalized.get("carton_weight") or p_wei
+
+            for attr, val in [
+                ("length", p_len), ("width", p_wid), ("height", p_hei), ("weight", p_wei),
+                ("carton_length", c_len), ("carton_width", c_wid), ("carton_height", c_hei), ("carton_weight", c_wei),
+            ]:
+                if not getattr(existing_product, attr):
+                    setattr(existing_product, attr, val)
+                    updated_fields.append(attr)
+
+            # If existing product is missing images or has S3 paths, update to direct Yiwugo URLs
+            img1_val = str(existing_product.product_image_1 or "")
+            if (not img1_val or img1_val.startswith("image/product/image/")) and normalized.get("image_urls"):
+                for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
+                    if url:
+                        setattr(existing_product, f"product_image_{idx}", str(url).strip())
+                        if f"product_image_{idx}" not in updated_fields:
                             updated_fields.append(f"product_image_{idx}")
-                if updated_fields:
-                    existing_product._skip_faiss_refresh = True
-                    existing_product.save(update_fields=updated_fields)
+
+            if updated_fields:
+                existing_product._skip_faiss_refresh = True
+                existing_product.save(update_fields=updated_fields)
+                # Also update ProductImage gallery records and models
+                for fld in [f for f in updated_fields if f.startswith("product_image_")]:
+                    img_f = getattr(existing_product, fld, None)
+                    img_val = img_f.name if hasattr(img_f, "name") else str(img_f)
+                    if img_val and not models.ProductImage.objects.filter(product=existing_product, image=img_val).exists():
+                        models.ProductImage.objects.create(product=existing_product, image=img_val)
+                if existing_product.product_image_1:
+                    p1_val = existing_product.product_image_1.name if hasattr(existing_product.product_image_1, "name") else str(existing_product.product_image_1)
+                    models.ProductModel.objects.filter(
+                        Q(model_image__isnull=True) | Q(model_image="") | Q(model_image__startswith="image/"),
+                        product=existing_product,
+                    ).update(model_image=p1_val)
+                    models.ProductModelVariant.objects.filter(
+                        Q(image__isnull=True) | Q(image="") | Q(image__startswith="image/"),
+                        product=existing_product,
+                    ).update(image=p1_val)
+
                     created_products.append({
                         "id": existing_product.id,
                         "source_id": normalized["source_id"],
@@ -2195,7 +2335,7 @@ def _process_yuwi_go_items(
             skipped_products.append({
                 "source_id": normalized["source_id"],
                 "product_name": product_name,
-                "reason": f"Product name already exists in product_added_from='{YUWI_GO_SOURCE}'",
+                "reason": f"Product already exists (id={existing_product.id}, code={existing_product.product_code})",
             })
             continue
 
@@ -2230,6 +2370,146 @@ def _process_yuwi_go_items(
             })
 
     return created_products, skipped_products, failed_products
+
+
+def _run_yuwi_go_full_job(
+    job_id,
+    cny_rate=7.0,
+    default_category_id=None,
+    default_subcategory_id=None,
+    default_vendor_id=None,
+    available_country_ids=None,
+    translate_enabled=True,
+    fetch_detail=True,
+    start_page=1,
+    page_size=60,
+    search_query="",
+):
+    """
+    Fully self-contained background worker for no-param import.
+    Does token auth + all page fetches entirely in background.
+    View returns 202 immediately after spawning this thread.
+    """
+    try:
+        # Step 1: get token in background
+        with YUWI_GO_JOBS_LOCK:
+            YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "authenticating"
+
+        access_token, is_oauth_token = _get_yiwugo_access_token(None)
+
+        if not access_token:
+            with YUWI_GO_JOBS_LOCK:
+                YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "failed"
+                YUWI_GO_IMPORT_JOBS[job_id]["last_error"] = "Could not obtain Yiwugo access token"
+            return
+
+        # Step 2: fetch first page to get total_pages
+        with YUWI_GO_JOBS_LOCK:
+            YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "running"
+
+        first_page_data = _fetch_yiwugo_live_page(
+            access_token=access_token,
+            page=start_page,
+            page_size=page_size,
+            search_query=search_query,
+            is_oauth_token=is_oauth_token,
+        )
+        total_found = first_page_data.get("numfound") or len(first_page_data.get("prslist") or [])
+        if isinstance(total_found, str):
+            total_found = int(total_found) if total_found.isdigit() else 0
+        elif not isinstance(total_found, int):
+            total_found = 0
+        total_pages = max(1, math.ceil(total_found / page_size)) if total_found else 1
+        end_page = total_pages
+
+        with YUWI_GO_JOBS_LOCK:
+            j = YUWI_GO_IMPORT_JOBS[job_id]
+            j["end_page"] = end_page
+            j["total_pages_available"] = total_pages
+            j["total_products_available"] = total_found
+
+        # Step 3: iterate all pages
+        for current_page in range(start_page, end_page + 1):
+            close_old_connections()
+            active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
+            if current_page == start_page:
+                page_data = first_page_data
+            else:
+                for retry in range(3):
+                    try:
+                        page_data = _fetch_yiwugo_live_page(
+                            access_token=active_token,
+                            page=current_page,
+                            page_size=page_size,
+                            search_query=search_query,
+                            is_oauth_token=is_oauth_token,
+                        )
+                        break
+                    except Exception as p_err:
+                        if retry == 2:
+                            with YUWI_GO_JOBS_LOCK:
+                                YUWI_GO_IMPORT_JOBS[job_id]["last_error"] = f"Page {current_page} failed: {p_err}"
+                            page_data = {}
+                        else:
+                            time.sleep(1.5)
+
+            page_items = list((page_data or {}).get("prslist") or [])
+            if not page_items:
+                if page_data == {}:
+                    with YUWI_GO_JOBS_LOCK:
+                        j = YUWI_GO_IMPORT_JOBS.get(job_id)
+                        if j:
+                            j["current_page"] = current_page
+                            j["pages_processed"] += 1
+                    continue
+                if current_page > start_page:
+                    break
+            else:
+                created, skipped, failed = _process_yuwi_go_items(
+                    raw_items=page_items,
+                    access_token=active_token,
+                    is_oauth_token=is_oauth_token,
+                    cny_rate=cny_rate,
+                    default_category_id=default_category_id,
+                    default_subcategory_id=default_subcategory_id,
+                    default_vendor_id=default_vendor_id,
+                    available_country_ids=available_country_ids,
+                    translate_enabled=translate_enabled,
+                    download_images=False,
+                    fetch_detail=fetch_detail,
+                )
+                with YUWI_GO_JOBS_LOCK:
+                    j = YUWI_GO_IMPORT_JOBS[job_id]
+                    j["current_page"] = current_page
+                    j["pages_processed"] += 1
+                    j["total_received"] += len(page_items)
+                    j["created_count"] += len(created)
+                    j["skipped_count"] += len(skipped)
+                    j["failed_count"] += len(failed)
+                    print(
+                        f"[Yiwugo Job {job_id}] Page {current_page}/{end_page}: "
+                        f"+{len(created)} created, {len(skipped)} skipped, {len(failed)} failed "
+                        f"(totals: created={j['created_count']}, skipped={j['skipped_count']}, failed={j['failed_count']})",
+                        flush=True,
+                    )
+                    if failed:
+                        recent = j.setdefault("recent_failures", [])
+                        for f in failed[-5:]:
+                            recent.append({
+                                "source_id": f.get("source_id"),
+                                "product_name": f.get("product_name", "")[:60],
+                                "reason": f.get("reason", "")[:300],
+                            })
+                        j["recent_failures"] = recent[-10:]
+
+        with YUWI_GO_JOBS_LOCK:
+            YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "completed"
+    except Exception as exc:
+        with YUWI_GO_JOBS_LOCK:
+            YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "failed"
+            YUWI_GO_IMPORT_JOBS[job_id]["last_error"] = str(exc)
+    finally:
+        close_old_connections()
 
 
 def _run_yuwi_go_bulk_job(
@@ -2293,8 +2573,18 @@ def _run_yuwi_go_bulk_job(
                     if str(item.get("id")) == str(product_id_filter)
                 ]
 
-            if not page_items and current_page > start_page:
-                break
+            if not page_items:
+                # If page fetch failed due to a network timeout, continue to next page instead of aborting the job
+                if page_data == {}:
+                    with YUWI_GO_JOBS_LOCK:
+                        job = YUWI_GO_IMPORT_JOBS.get(job_id)
+                        if job:
+                            job["current_page"] = current_page
+                            job["pages_processed"] += 1
+                    continue
+                # If Yiwugo legitimately returned an empty list, we reached the end
+                if current_page > start_page:
+                    break
 
             if access_token and is_oauth_token:
                 active_token = cache.get(YIWUGO_TOKEN_CACHE_KEY) or active_token
@@ -2322,6 +2612,16 @@ def _run_yuwi_go_bulk_job(
                 job["skipped_count"] += len(skipped)
                 job["failed_count"] += len(failed)
                 job["last_error"] = None
+                # Store last 5 failure reasons for debugging
+                if failed:
+                    recent = job.setdefault("recent_failures", [])
+                    for f in failed[-5:]:
+                        recent.append({
+                            "source_id": f.get("source_id"),
+                            "product_name": f.get("product_name", "")[:60],
+                            "reason": f.get("reason", "")[:300],
+                        })
+                    job["recent_failures"] = recent[-10:]  # keep last 10
 
         with YUWI_GO_JOBS_LOCK:
             YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "completed"
@@ -2349,11 +2649,14 @@ def import_yuwi_go_products(request):
         params = request.GET.dict()
     elif request.body:
         try:
-            params = json.loads(request.body)
+            parsed = json.loads(request.body)
+            params = parsed if isinstance(parsed, dict) else {}
         except Exception:
             params = request.POST.dict()
     else:
         params = request.POST.dict()
+    if not isinstance(params, dict):
+        params = {}
 
     job_id_query = params.get("job_id")
     if job_id_query:
@@ -2392,14 +2695,80 @@ def import_yuwi_go_products(request):
         import_all = not (isinstance(incoming_products, list) and incoming_products) and not params.get("page") and not params.get("cpage")
 
     translate_enabled = str(params.get("translate", "true")).lower() not in ["false", "0", "no"]
-    download_images = str(params.get("download_images", "true")).lower() not in ["false", "0", "no"]
+    download_images = False  # Direct Yiwugo CDN image URLs are always stored directly without S3 upload
     fast_mode = str(params.get("fast_mode", "false")).lower() in ["true", "1", "yes"]
     fetch_detail = False if fast_mode else (str(params.get("fetch_detail", "true")).lower() not in ["false", "0", "no"])
 
     explicit_token = params.get("access_token") or request.headers.get("X-Access-Token")
-    access_token, is_oauth_token = _get_yiwugo_access_token(explicit_token)
     doc_detail_example = None
     source_note = None
+
+    # -----------------------------------------------------------------
+    # BACKGROUND mode (default) — spawn full-async worker, return 202 now
+    # No network calls happen in the request thread; thread does everything.
+    # -----------------------------------------------------------------
+    run_background = str(params.get("background", "true")).lower() not in ["false", "0", "no"]
+
+    if not (isinstance(incoming_products, list) and incoming_products) and run_background:
+        start_page = max(1, int(params.get("start_page") or params.get("page") or params.get("cpage") or 1))
+        page_size = min(60, max(1, int(params.get("page_size") or params.get("pageSize") or 60)))
+        search_query = params.get("q") or params.get("query") or ""
+
+        job_id = uuid.uuid4().hex[:12]
+        with YUWI_GO_JOBS_LOCK:
+            YUWI_GO_IMPORT_JOBS[job_id] = {
+                "job_id": job_id,
+                "job_status": "queued",
+                "source_mode": "Live Gateway",
+                "exchange_rate": f"{cny_rate} CNY = 1 USD",
+                "start_page": start_page,
+                "end_page": "TBD",
+                "current_page": start_page - 1,
+                "total_pages_available": "TBD",
+                "total_products_available": "TBD",
+                "pages_processed": 0,
+                "total_received": 0,
+                "created_count": 0,
+                "skipped_count": 0,
+                "failed_count": 0,
+                "last_error": None,
+            }
+        worker = threading.Thread(
+            target=_run_yuwi_go_full_job,
+            kwargs={
+                "job_id": job_id,
+                "cny_rate": cny_rate,
+                "default_category_id": default_category_id,
+                "default_subcategory_id": default_subcategory_id,
+                "default_vendor_id": default_vendor_id,
+                "available_country_ids": available_country_ids,
+                "translate_enabled": translate_enabled,
+                "fetch_detail": fetch_detail,
+                "start_page": start_page,
+                "page_size": page_size,
+                "search_query": search_query,
+            },
+            daemon=True,
+        )
+        worker.start()
+        return JsonResponse(
+            {
+                "status": "started",
+                "message": "Import job started in background. Products are being added to the database.",
+                "job_id": job_id,
+                "status_check_url": f"/api/import_yuwi_go_products/?job_id={job_id}",
+                "fetch_detail": fetch_detail,
+                "fast_mode": fast_mode,
+                "exchange_rate": f"{cny_rate} CNY = 1 USD",
+            },
+            status=202,
+            json_dumps_params={"indent": 2},
+        )
+
+    # -----------------------------------------------------------------
+    # Remaining paths: direct payload or sync (background=false)
+    # -----------------------------------------------------------------
+    access_token, is_oauth_token = _get_yiwugo_access_token(explicit_token)
 
     if isinstance(incoming_products, list) and incoming_products:
         source_mode = "Request Payload"
@@ -2442,142 +2811,79 @@ def import_yuwi_go_products(request):
                 total_found = len(raw_response_data.get("prslist") or [])
             total_pages = max(1, math.ceil(total_found / page_size))
 
-            if import_all and total_pages > page:
+            end_page = page
+            if params.get("end_page"):
+                end_page = max(page, int(params.get("end_page")))
+            elif params.get("max_pages"):
+                end_page = page + max(1, int(params.get("max_pages"))) - 1
+            elif import_all:
                 end_page = total_pages
-                if params.get("end_page"):
-                    end_page = min(end_page, max(page, int(params.get("end_page"))))
-                if params.get("max_pages"):
-                    end_page = min(end_page, page + max(1, int(params.get("max_pages"))) - 1)
+            end_page = min(total_pages, end_page)
 
-                run_background = str(params.get("background", "true")).lower() not in ["false", "0", "no"]
-                if run_background and end_page > page:
-                    job_id = uuid.uuid4().hex[:12]
-                    with YUWI_GO_JOBS_LOCK:
-                        YUWI_GO_IMPORT_JOBS[job_id] = {
-                            "job_id": job_id,
-                            "job_status": "running",
-                            "source_mode": "Live Gateway",
-                            "exchange_rate": f"{cny_rate} CNY = 1 USD",
-                            "start_page": page,
-                            "end_page": end_page,
-                            "current_page": page - 1,
-                            "total_pages_available": total_pages,
-                            "total_products_available": total_found,
-                            "pages_processed": 0,
-                            "total_received": 0,
-                            "created_count": 0,
-                            "skipped_count": 0,
-                            "failed_count": 0,
-                            "last_error": None,
-                        }
-                    worker = threading.Thread(
-                        target=_run_yuwi_go_bulk_job,
-                        kwargs={
-                            "job_id": job_id,
-                            "access_token": access_token,
-                            "first_page_data": raw_response_data,
-                            "start_page": page,
-                            "end_page": end_page,
-                            "page_size": page_size,
-                            "search_query": search_query,
-                            "product_id_filter": product_id_filter,
-                            "cny_rate": cny_rate,
-                            "default_category_id": default_category_id,
-                            "default_subcategory_id": default_subcategory_id,
-                            "default_vendor_id": default_vendor_id,
-                            "available_country_ids": available_country_ids,
-                            "translate_enabled": translate_enabled,
-                            "download_images": download_images,
-                            "is_oauth_token": is_oauth_token,
-                            "fetch_detail": fetch_detail,
-                        },
-                        daemon=True,
-                    )
-                    worker.start()
-                    return JsonResponse(
-                        {
-                            "status": "started",
-                            "source_mode": "Live Gateway",
-                            "job_id": job_id,
-                            "status_check_url": f"/api/import_yuwi_go_products/?job_id={job_id}",
-                            "start_page": page,
-                            "end_page": end_page,
-                            "page_size": page_size,
-                            "total_products_available": total_found,
-                            "total_pages_available": total_pages,
-                            "exchange_rate": f"{cny_rate} CNY = 1 USD",
-                            "download_images": download_images,
-                            "fetch_detail": fetch_detail,
-                            "fast_mode": fast_mode,
-                        },
-                        status=202,
-                        json_dumps_params={"indent": 2},
-                    )
-
-                # Synchronous multi-page import (when background=false)
-                all_created, all_skipped, all_failed = [], [], []
-                total_received = 0
-                pages_processed = 0
-                for cur_page in range(page, end_page + 1):
-                    active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
-                    p_data = raw_response_data if cur_page == page else _fetch_yiwugo_live_page(
-                        access_token=active_token,
-                        page=cur_page,
-                        page_size=page_size,
-                        search_query=search_query,
-                        is_oauth_token=is_oauth_token,
-                    )
-                    p_items = list((p_data or {}).get("prslist") or [])
-                    if product_id_filter:
-                        p_items = [x for x in p_items if str(x.get("id")) == str(product_id_filter)]
-                    if not p_items and cur_page > page:
-                        break
-                    total_received += len(p_items)
-                    pages_processed += 1
-                    active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or active_token) if is_oauth_token else active_token
-                    c_list, s_list, f_list = _process_yuwi_go_items(
-                        raw_items=p_items,
-                        access_token=active_token,
-                        is_oauth_token=is_oauth_token,
-                        cny_rate=cny_rate,
-                        default_category_id=default_category_id,
-                        default_subcategory_id=default_subcategory_id,
-                        default_vendor_id=default_vendor_id,
-                        available_country_ids=available_country_ids,
-                        translate_enabled=translate_enabled,
-                        download_images=download_images,
-                        fetch_detail=fetch_detail,
-                    )
-                    all_created.extend(c_list)
-                    all_skipped.extend(s_list)
-                    all_failed.extend(f_list)
-
-                return JsonResponse(
-                    {
-                        "status": "success",
-                        "source_mode": source_mode,
-                        "exchange_rate": f"{cny_rate} CNY = 1 USD",
-                        "pagination": {
-                            "start_page": page,
-                            "end_page": end_page,
-                            "pages_processed": pages_processed,
-                            "page_size": page_size,
-                            "total_products_available": total_found,
-                            "total_pages": total_pages,
-                        },
-                        "summary": {
-                            "total_received": total_received,
-                            "created_count": len(all_created),
-                            "skipped_count": len(all_skipped),
-                            "failed_count": len(all_failed),
-                        },
-                        "created_products": all_created,
-                        "skipped_products": all_skipped,
-                        "failed_products": all_failed,
-                    },
-                    status=200,
-                    json_dumps_params={"indent": 2},
+            # Synchronous multi-page import (background=false)
+            all_created, all_skipped, all_failed = [], [], []
+            total_received = 0
+            pages_processed = 0
+            for cur_page in range(page, end_page + 1):
+                active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
+                p_data = raw_response_data if cur_page == page else _fetch_yiwugo_live_page(
+                    access_token=active_token,
+                    page=cur_page,
+                    page_size=page_size,
+                    search_query=search_query,
+                    is_oauth_token=is_oauth_token,
                 )
+                p_items = list((p_data or {}).get("prslist") or [])
+                if product_id_filter:
+                    p_items = [x for x in p_items if str(x.get("id")) == str(product_id_filter)]
+                if not p_items and cur_page > page:
+                    break
+                total_received += len(p_items)
+                pages_processed += 1
+                active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or active_token) if is_oauth_token else active_token
+                c_list, s_list, f_list = _process_yuwi_go_items(
+                    raw_items=p_items,
+                    access_token=active_token,
+                    is_oauth_token=is_oauth_token,
+                    cny_rate=cny_rate,
+                    default_category_id=default_category_id,
+                    default_subcategory_id=default_subcategory_id,
+                    default_vendor_id=default_vendor_id,
+                    available_country_ids=available_country_ids,
+                    translate_enabled=translate_enabled,
+                    download_images=download_images,
+                    fetch_detail=fetch_detail,
+                )
+                all_created.extend(c_list)
+                all_skipped.extend(s_list)
+                all_failed.extend(f_list)
+
+            return JsonResponse(
+                {
+                    "status": "success",
+                    "source_mode": source_mode,
+                    "exchange_rate": f"{cny_rate} CNY = 1 USD",
+                    "pagination": {
+                        "start_page": page,
+                        "end_page": end_page,
+                        "pages_processed": pages_processed,
+                        "page_size": page_size,
+                        "total_products_available": total_found,
+                        "total_pages": total_pages,
+                    },
+                    "summary": {
+                        "total_received": total_received,
+                        "created_count": len(all_created),
+                        "skipped_count": len(all_skipped),
+                        "failed_count": len(all_failed),
+                    },
+                    "created_products": all_created,
+                    "skipped_products": all_skipped,
+                    "failed_products": all_failed,
+                },
+                status=200,
+                json_dumps_params={"indent": 2},
+            )
 
         if raw_response_data is None:
             try:
@@ -2684,7 +2990,7 @@ def sync_third_party_products(request):
         import_all = not params.get("page") and not params.get("cpage")
 
     translate_enabled = str(params.get("translate", "true")).lower() not in ["false", "0", "no"]
-    download_images = str(params.get("download_images", "true")).lower() not in ["false", "0", "no"]
+    download_images = False  # Direct Yiwugo CDN image URLs are always stored directly without S3 upload
     fast_mode = str(params.get("fast_mode", "false")).lower() in ["true", "1", "yes"]
     fetch_detail = False if fast_mode else (str(params.get("fetch_detail", "true")).lower() not in ["false", "0", "no"])
     max_pages = int(params["max_pages"]) if str(params.get("max_pages", "")).isdigit() else None

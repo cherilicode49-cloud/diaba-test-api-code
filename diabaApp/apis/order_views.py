@@ -1636,7 +1636,8 @@ def variant_order_status_update(request):
 
             token = status_create.order.customer.FCMToken
             product_name = status_create.variant.product.product_name
-            product_image = IMAGE_URL + str(status_create.variant.product.product_image_1)
+            prod_img = str(status_create.variant.product.product_image_1 or "")
+            product_image = prod_img if prod_img.startswith(("http://", "https://")) else (IMAGE_URL + prod_img)
             # print(product_image, 'product_image')
             # product_name = full_name[:15] + "..." if len(full_name) > 15 else full_name
             title = 'Order Status Updated'

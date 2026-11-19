@@ -771,6 +771,7 @@ def customer_wishlist_cart_list(request):
                             'tracking_amount': tracking_amount,
                             'tracking_amount_view': view_fmt(tracking_amount),
                             'amount_to_paid_view': view_fmt(amount_to_paid),
+                            'tax_percentage': 2.5,
                             'amount_to_paid_with_tax_view': view_fmt(amount_to_paid_with_tax),
                             'amount_to_paid': amount_to_paid,
                             'amount_to_paid_with_tax': amount_to_paid_with_tax,
@@ -800,6 +801,8 @@ def customer_wishlist_cart_list(request):
                         'tracking_amount': tracking_amount,
                         'tracking_amount_view': view_fmt(tracking_amount),
                         'amount_to_paid_view': view_fmt(amount_to_paid),
+                        'tax_percentage': 2.5,
+
                         'amount_to_paid_with_tax_view': view_fmt(amount_to_paid_with_tax),
                         'amount_to_paid_with_tax': amount_to_paid_with_tax,
                         'amount_to_paid': amount_to_paid,
