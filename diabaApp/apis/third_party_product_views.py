@@ -1591,7 +1591,7 @@ def _fetch_yiwugo_product_detail(product_id, access_token=None, is_oauth_token=F
             resp = requests.get(
                 "https://open.yiwugo.com/open/cn_product/detail",
                 params={"access_token": access_token, "productId": product_id},
-                timeout=15,
+                timeout=30,
                 verify=False,
             )
             resp_json = resp.json()
@@ -2058,7 +2058,10 @@ def _import_single_yuwi_go_product(
                 if img_val:
                     image_records.append(models.ProductImage(product_id=product.id, image=img_val))
         if image_records:
-            models.ProductImage.objects.bulk_create(image_records)
+            try:
+                models.ProductImage.objects.bulk_create(image_records)
+            except Exception as img_err:
+                logger.warning(f"ProductImage bulk_create failed for product {product.id}: {img_err}")
 
         # Bulk create ProductOtherSpecification records
         spec_records = []
@@ -2071,7 +2074,10 @@ def _import_single_yuwi_go_product(
                 value_french=_translate_to_french(val, enabled=translate_enabled),
             ))
         if spec_records:
-            models.ProductOtherSpecification.objects.bulk_create(spec_records)
+            try:
+                models.ProductOtherSpecification.objects.bulk_create(spec_records)
+            except Exception as spec_err:
+                logger.warning(f"ProductOtherSpecification bulk_create failed for product {product.id}: {spec_err}")
 
         variant_prices = []
         primary_image = getattr(product, "product_image_1", None)
@@ -2114,20 +2120,33 @@ def _import_single_yuwi_go_product(
                     sku_data_list.append((variant_price_usd, sku.get("stock")))
 
                 created_variants = models.ProductModelVariant.objects.bulk_create(variant_objs)
+                # Ensure all variant instances have .id even if the database engine doesn't support RETURNING id
+                if not all(getattr(v, "id", None) for v in created_variants):
+                    created_variants = list(
+                        models.ProductModelVariant.objects.filter(
+                            product_id=product.id, model_id=model_obj.id
+                        ).order_by("id")
+                    )
+
                 if vendor_obj and created_variants:
                     vpp_objs = []
                     for v_inst, (v_price, v_stock) in zip(created_variants, sku_data_list):
-                        vpp_objs.append(models.VendorProductPrice(
-                            product_id=product.id,
-                            model_id=model_obj.id,
-                            vendor_id=vendor_obj.id,
-                            variant_id=v_inst.id,
-                            price=str(v_price),
-                            quantity=str(v_stock) if v_stock is not None else None,
-                            status="Active",
-                        ))
+                        vid = getattr(v_inst, "id", None)
+                        if vid:
+                            vpp_objs.append(models.VendorProductPrice(
+                                product_id=product.id,
+                                model_id=model_obj.id,
+                                vendor_id=vendor_obj.id,
+                                variant_id=vid,
+                                price=str(v_price),
+                                quantity=str(v_stock) if v_stock is not None else None,
+                                status="Active",
+                            ))
                     if vpp_objs:
-                        models.VendorProductPrice.objects.bulk_create(vpp_objs)
+                        try:
+                            models.VendorProductPrice.objects.bulk_create(vpp_objs)
+                        except Exception as vpp_err:
+                            logger.warning(f"VendorProductPrice bulk_create failed for product {product.id}: {vpp_err}")
         else:
             model_obj = models.ProductModel.objects.create(
                 product_id=product.id,
@@ -2149,14 +2168,17 @@ def _import_single_yuwi_go_product(
                 is_deleted=False,
             )
             if vendor_obj:
-                models.VendorProductPrice.objects.create(
-                    product_id=product.id,
-                    model_id=model_obj.id,
-                    vendor_id=vendor_obj.id,
-                    variant_id=variant_obj.id,
-                    price=str(price_usd),
-                    status="Active",
-                )
+                try:
+                    models.VendorProductPrice.objects.create(
+                        product_id=product.id,
+                        model_id=model_obj.id,
+                        vendor_id=vendor_obj.id,
+                        variant_id=variant_obj.id,
+                        price=str(price_usd),
+                        status="Active",
+                    )
+                except Exception as vpp_err:
+                    logger.warning(f"VendorProductPrice create failed for product {product.id}: {vpp_err}")
 
         if price_usd == 0.0 and variant_prices:
             min_variant_price = min(variant_prices)
@@ -2181,7 +2203,7 @@ def _fetch_yiwugo_live_page(access_token=None, page=1, page_size=20, search_quer
         resp = requests.get(
             "https://open.yiwugo.com/open/cn_product/list",
             params=live_params,
-            timeout=35,
+            timeout=45,
             verify=False,
         )
         resp_json = resp.json()
@@ -2378,7 +2400,7 @@ def _process_yuwi_go_items(
                     return pid, _fetch_yiwugo_product_detail(pid, access_token=active_token, is_oauth_token=is_oauth_token)
                 except Exception:
                     return pid, None
-            with ThreadPoolExecutor(max_workers=min(12, len(ids_to_fetch))) as pool:
+            with ThreadPoolExecutor(max_workers=min(6, len(ids_to_fetch))) as pool:
                 for pid, d_data in pool.map(_fetch_one_detail, ids_to_fetch):
                     prefetched_ids.add(str(pid))
                     if d_data:
@@ -2543,10 +2565,15 @@ def _process_yuwi_go_items(
                 "product_added_from": product.product_added_from,
             }
         except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            err_msg = f"{type(exc).__name__}: {exc}"
+            print(f"[Import Error] Product source_id={item.get('id')}: {err_msg}", flush=True)
+            logger.warning(f"Failed to import product {item.get('id')}: {err_msg}\n{tb}")
             return "failed", {
                 "source_id": normalized.get("source_id") if "normalized" in locals() else item.get("id"),
                 "product_name": product_name if "product_name" in locals() else "",
-                "reason": str(exc),
+                "reason": err_msg,
             }
         finally:
             close_old_connections()
@@ -2696,6 +2723,11 @@ def _run_yuwi_go_full_job(
                         flush=True,
                     )
                     if failed:
+                        for idx, f in enumerate(failed[:3], start=1):
+                            print(
+                                f"[Yiwugo Job {job_id}] Failure #{idx} (source_id={f.get('source_id')}, name={f.get('product_name')[:30]}): {f.get('reason')}",
+                                flush=True,
+                            )
                         recent = j.setdefault("recent_failures", [])
                         for f in failed[-5:]:
                             recent.append({
@@ -2817,6 +2849,11 @@ def _run_yuwi_go_bulk_job(
                 job["last_error"] = None
                 # Store last 5 failure reasons for debugging
                 if failed:
+                    for idx, f in enumerate(failed[:3], start=1):
+                        print(
+                            f"[Yiwugo Job {job_id}] Failure #{idx} (source_id={f.get('source_id')}, name={f.get('product_name')[:30]}): {f.get('reason')}",
+                            flush=True,
+                        )
                     recent = job.setdefault("recent_failures", [])
                     for f in failed[-5:]:
                         recent.append({
