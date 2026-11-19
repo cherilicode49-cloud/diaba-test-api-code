@@ -94,7 +94,9 @@ def _get_yiwugo_access_token(explicit_token=None, force_refresh=False):
     """Resolve explicit token, settings.YIWUGO_ACCESS_TOKEN, or auto-fetched OAuth token."""
     if explicit_token:
         return explicit_token, False
-    configured = getattr(settings, "YIWUGO_ACCESS_TOKEN", None) or os.getenv("YIWUGO_ACCESS_TOKEN")
+    if force_refresh:
+        return _fetch_yiwugo_oauth_token(force_refresh=True), True
+    configured = (getattr(settings, "YIWUGO_ACCESS_TOKEN", None) or os.getenv("YIWUGO_ACCESS_TOKEN") or "").strip()
     if configured:
         return configured, False
     return _fetch_yiwugo_oauth_token(force_refresh=force_refresh), True
@@ -289,7 +291,9 @@ def _fetch_third_party_products_data(params, headers=None):
         all_param_keys.update(item.keys())
         p_id = item.get('id')
         raw_p_title = item.get('title') or ''
-        p_title = _translate_to_english(raw_p_title, enabled=True, fallback=f"Yiwugo Product {p_id}" if p_id else "")
+        p_title = _translate_to_english(raw_p_title, enabled=True, fallback="")
+        if not p_title:
+            p_title = _strip_cjk(raw_p_title) or raw_p_title
         p_title_french = _translate_to_french(p_title, enabled=translate_fetch) if p_title else ""
         p_price = item.get('sellPrice')
         p_start_num = item.get('startNum')
@@ -1094,18 +1098,26 @@ def _translate_many(texts, dest="en"):
             except RuntimeError:
                 return asyncio.run(_async_translate_batch(batch_items, dest))
 
-        for start in range(0, len(unique_inputs), 25):
-            chunk = unique_inputs[start:start + 25]
+        for start in range(0, len(unique_inputs), 10):
+            chunk = unique_inputs[start:start + 10]
+            results = []
             try:
                 results = _run_batch(chunk)
             except Exception:
                 results = []
-            with _TRANSLATION_CACHE_LOCK:
-                if len(_TRANSLATION_CACHE) > 20000:
-                    _TRANSLATION_CACHE.clear()
-                for snippet, res in zip(chunk, results):
-                    translated = getattr(res, "text", None) if not isinstance(res, Exception) else None
-                    if translated:
+
+            for idx, snippet in enumerate(chunk):
+                res = results[idx] if idx < len(results) else None
+                translated = getattr(res, "text", None) if (res and not isinstance(res, Exception)) else None
+                if not translated:
+                    try:
+                        single_res = _run_batch([snippet])
+                        if single_res and not isinstance(single_res[0], Exception):
+                            translated = getattr(single_res[0], "text", None)
+                    except Exception:
+                        pass
+                if translated:
+                    with _TRANSLATION_CACHE_LOCK:
                         _TRANSLATION_CACHE[(snippet, dest)] = translated.strip()
 
     output = {}
@@ -1139,9 +1151,24 @@ def _translate_to_english(text, enabled=True, fallback=""):
         translated = _translate_many([clean], dest="en").get(clean, clean)
 
     if _contains_cjk(translated):
+        # Direct fallback retry with dedicated single-translator call
+        try:
+            async def _single_tr():
+                async with Translator() as tr:
+                    r = await tr.translate(clean[:1500], dest="en")
+                    return r.text
+            direct_res = asyncio.run(_single_tr())
+            if direct_res and not _contains_cjk(direct_res):
+                translated = direct_res.strip()
+                with _TRANSLATION_CACHE_LOCK:
+                    _TRANSLATION_CACHE[(clean[:4500], "en")] = translated
+        except Exception:
+            pass
+
+    if _contains_cjk(translated):
         stripped = _strip_cjk(translated)
-        return stripped or fallback
-    return translated or fallback
+        return stripped or fallback or clean
+    return translated or fallback or clean
 
 
 def _translate_to_french(text, enabled=True):
@@ -1153,6 +1180,20 @@ def _translate_to_french(text, enabled=True):
         return clean
 
     translated = _translate_many([clean], dest="fr").get(clean, clean)
+    if translated == clean and _contains_cjk(clean):
+        try:
+            async def _single_fr():
+                async with Translator() as tr:
+                    r = await tr.translate(clean[:1500], dest="fr")
+                    return r.text
+            direct_fr = asyncio.run(_single_fr())
+            if direct_fr and direct_fr != clean:
+                translated = direct_fr.strip()
+                with _TRANSLATION_CACHE_LOCK:
+                    _TRANSLATION_CACHE[(clean[:4500], "fr")] = translated
+        except Exception:
+            pass
+
     if _contains_cjk(translated):
         stripped = _strip_cjk(translated)
         if stripped:
@@ -1544,7 +1585,7 @@ def _fetch_yiwugo_product_detail(product_id, access_token=None, is_oauth_token=F
     """Fetch Yiwugo product detail payload via live API when an access_token is supplied."""
     if not access_token or not product_id:
         return None
-    for attempt in range(2 if is_oauth_token else 1):
+    for attempt in range(2):
         try:
             resp = requests.get(
                 "https://open.yiwugo.com/open/cn_product/detail",
@@ -1555,8 +1596,8 @@ def _fetch_yiwugo_product_detail(product_id, access_token=None, is_oauth_token=F
             resp_json = resp.json()
             if resp_json.get("code") == 0:
                 return resp_json.get("data") or {}
-            if resp_json.get("code") == 501 and is_oauth_token and attempt == 0:
-                refreshed, _ = _get_yiwugo_access_token(force_refresh=True)
+            if resp_json.get("code") == 501 and attempt == 0:
+                refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
                 if refreshed:
                     access_token = refreshed
                     continue
@@ -1732,11 +1773,14 @@ def _extract_product_payload(item, detail_data=None):
 
     source_id = detail_vo.get("id") or item.get("id") or base.get("id")
     raw_title = (detail_vo.get("title") or item.get("title") or base.get("title") or "").strip()
-    title = _translate_to_english(
-        raw_title,
-        enabled=True,
-        fallback=f"Yiwugo Product {source_id}" if source_id else "",
-    )
+    title = _translate_to_english(raw_title, enabled=True, fallback="")
+    if (not title or title.startswith("Yiwugo Product")) and raw_title:
+        # Retry with alt title
+        alt_title = (item.get("title") or detail_vo.get("title") or base.get("title") or "").strip()
+        if alt_title and alt_title != raw_title:
+            title = _translate_to_english(alt_title, enabled=True, fallback="")
+        if not title:
+            title = _strip_cjk(raw_title) or raw_title
     goods_code = (
         detail_vo.get("goodsCode")
         or item.get("goods_code")
@@ -2107,29 +2151,42 @@ def _fetch_yiwugo_live_page(access_token=None, page=1, page_size=20, search_quer
     if not access_token:
         access_token, is_oauth_token = _get_yiwugo_access_token()
     if not access_token:
+        access_token = _fetch_yiwugo_oauth_token()
+        is_oauth_token = True
+    if not access_token:
         raise ValueError("No Yiwugo access_token or OAuth credentials configured.")
 
-    for attempt in range(2 if is_oauth_token else 1):
+    for attempt in range(2):
         live_params = {"access_token": access_token, "cpage": page, "pageSize": page_size}
         if search_query:
             live_params["q"] = search_query
-        resp = requests.get(
-            "https://open.yiwugo.com/open/cn_product/list",
-            params=live_params,
-            timeout=35,
-            verify=False,
-        )
-        resp_json = resp.json()
-        if resp_json.get("code") == 0:
-            return resp_json.get("data") or {}
-        if resp_json.get("code") == 501 and is_oauth_token and attempt == 0:
-            refreshed, _ = _get_yiwugo_access_token(force_refresh=True)
-            if refreshed:
-                access_token = refreshed
-                continue
-        raise ValueError(
-            f"Yiwugo live API rejected request (code={resp_json.get('code')}): {resp_json.get('message') or resp_json}"
-        )
+        try:
+            resp = requests.get(
+                "https://open.yiwugo.com/open/cn_product/list",
+                params=live_params,
+                timeout=35,
+                verify=False,
+            )
+            resp_json = resp.json()
+            if resp_json.get("code") == 0:
+                return resp_json.get("data") or {}
+            if resp_json.get("code") == 501 and attempt == 0:
+                refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
+                if refreshed:
+                    access_token = refreshed
+                    is_oauth_token = True
+                    continue
+            raise ValueError(
+                f"Yiwugo live API rejected request (code={resp_json.get('code')}): {resp_json.get('message') or resp_json}"
+            )
+        except requests.exceptions.RequestException as req_err:
+            if attempt == 0:
+                refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
+                if refreshed:
+                    access_token = refreshed
+                    is_oauth_token = True
+                    continue
+            raise
     return {}
 
 
@@ -2187,7 +2244,8 @@ def _process_yuwi_go_items(
                     ep.length, ep.width, ep.height, ep.weight,
                     ep.carton_length, ep.carton_width, ep.carton_height, ep.carton_weight,
                 ])
-                if has_direct_img and has_all_dims:
+                has_proper_name = not str(ep.product_name or "").startswith("Yiwugo Product")
+                if has_direct_img and has_all_dims and has_proper_name:
                     skipped_products.append({
                         "source_id": item_id,
                         "product_name": ep.product_name,
@@ -2290,6 +2348,22 @@ def _process_yuwi_go_items(
                     setattr(existing_product, attr, val)
                     updated_fields.append(attr)
 
+            # If existing product has dummy "Yiwugo Product <id>" name, update to proper name
+            if str(existing_product.product_name or "").startswith("Yiwugo Product") and product_name and not product_name.startswith("Yiwugo Product"):
+                existing_product.product_name = product_name
+                updated_fields.append("product_name")
+                prod_fr = _translate_to_french(product_name, enabled=translate_enabled)
+                if prod_fr and not prod_fr.startswith("Yiwugo Product"):
+                    existing_product.product_name_french = prod_fr
+                    updated_fields.append("product_name_french")
+                if str(existing_product.description or "").startswith("Yiwugo Product") and normalized.get("description"):
+                    existing_product.description = normalized["description"]
+                    updated_fields.append("description")
+                    desc_fr = _translate_to_french(normalized["description"], enabled=translate_enabled)
+                    if desc_fr:
+                        existing_product.description_french = desc_fr
+                        updated_fields.append("description_french")
+
             # If existing product is missing images or has S3 paths, update to direct Yiwugo URLs
             img1_val = str(existing_product.product_image_1 or "")
             if (not img1_val or img1_val.startswith("image/product/image/")) and normalized.get("image_urls"):
@@ -2319,18 +2393,18 @@ def _process_yuwi_go_items(
                         product=existing_product,
                     ).update(image=p1_val)
 
-                    created_products.append({
-                        "id": existing_product.id,
-                        "source_id": normalized["source_id"],
-                        "product_name": existing_product.product_name,
-                        "product_code": existing_product.product_code,
-                        "price_cny": normalized["raw_price_cny"],
-                        "price_usd": existing_product.price,
-                        "status": existing_product.status,
-                        "product_added_from": existing_product.product_added_from,
-                        "action": "images_backfilled",
-                    })
-                    continue
+                created_products.append({
+                    "id": existing_product.id,
+                    "source_id": normalized["source_id"],
+                    "product_name": existing_product.product_name,
+                    "product_code": existing_product.product_code,
+                    "price_cny": normalized["raw_price_cny"],
+                    "price_usd": existing_product.price,
+                    "status": existing_product.status,
+                    "product_added_from": existing_product.product_added_from,
+                    "action": "updated",
+                })
+                continue
 
             skipped_products.append({
                 "source_id": normalized["source_id"],
@@ -2407,13 +2481,28 @@ def _run_yuwi_go_full_job(
         with YUWI_GO_JOBS_LOCK:
             YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "running"
 
-        first_page_data = _fetch_yiwugo_live_page(
-            access_token=access_token,
-            page=start_page,
-            page_size=page_size,
-            search_query=search_query,
-            is_oauth_token=is_oauth_token,
-        )
+        try:
+            first_page_data = _fetch_yiwugo_live_page(
+                access_token=access_token,
+                page=start_page,
+                page_size=page_size,
+                search_query=search_query,
+                is_oauth_token=is_oauth_token,
+            )
+        except Exception as first_err:
+            refreshed = _fetch_yiwugo_oauth_token(force_refresh=True)
+            if refreshed:
+                access_token = refreshed
+                is_oauth_token = True
+                first_page_data = _fetch_yiwugo_live_page(
+                    access_token=access_token,
+                    page=start_page,
+                    page_size=page_size,
+                    search_query=search_query,
+                    is_oauth_token=True,
+                )
+            else:
+                raise first_err
         total_found = first_page_data.get("numfound") or len(first_page_data.get("prslist") or [])
         if isinstance(total_found, str):
             total_found = int(total_found) if total_found.isdigit() else 0
