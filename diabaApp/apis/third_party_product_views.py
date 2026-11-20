@@ -1225,6 +1225,9 @@ def _normalize_yiwugo_image_url(url):
     if not url or str(url).strip() in ["", "null", "None"]:
         return None
     val = str(url).strip()
+    # Strip OSS transforms / query parameters (e.g. ?x-oss-process=image/resize...)
+    # This keeps direct CDN URLs clean and well under 100 chars (typically 75-87 chars)
+    val = val.split("?")[0].strip()
     return val if val.startswith("http") else f"https://img1.yiwugou.com/{val.lstrip('/')}"
 
 
@@ -2003,9 +2006,12 @@ def _import_single_yuwi_go_product(
 
     image_kwargs = {}
     # ALWAYS store direct image URLs (never upload to AWS S3)
+    # Strip URL query parameters (OSS transforms) and ensure length <= 100 for varchar(100) compatibility
     for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
         if url:
-            image_kwargs[f"product_image_{idx}"] = str(url).strip()[:500]
+            clean_u = str(url).split("?")[0].strip()
+            if len(clean_u) <= 100:
+                image_kwargs[f"product_image_{idx}"] = clean_u
 
     with transaction.atomic():
         avail_qty = str(normalized.get("available_quantity") or "").strip()[:50] or None
@@ -2069,7 +2075,8 @@ def _import_single_yuwi_go_product(
             if img_field:
                 img_val = img_field.name if hasattr(img_field, "name") else str(img_field)
                 if img_val:
-                    image_records.append(models.ProductImage(product_id=product.id, image=img_val))
+                    clean_img = str(img_val).split("?")[0].strip()[:100]
+                    image_records.append(models.ProductImage(product_id=product.id, image=clean_img))
         if image_records:
             try:
                 models.ProductImage.objects.bulk_create(image_records)
@@ -2098,13 +2105,16 @@ def _import_single_yuwi_go_product(
 
         variant_prices = []
         primary_image = getattr(product, "product_image_1", None)
-        primary_image_val = (primary_image.name if hasattr(primary_image, "name") else str(primary_image or "")) or primary_image
+        primary_image_val = ""
+        if primary_image:
+            p_name = primary_image.name if hasattr(primary_image, "name") else str(primary_image)
+            primary_image_val = str(p_name).split("?")[0].strip()[:100]
 
         if grouped_skus:
             for model_name, sku_pairs in grouped_skus.items():
                 first_sku = sku_pairs[0][1] if sku_pairs else {}
-                first_sku_pic = first_sku.get("picture") if first_sku else None
-                first_model_img = str(first_sku_pic).strip() if first_sku_pic else primary_image_val
+                first_sku_pic = _normalize_yiwugo_image_url(first_sku.get("picture")) if first_sku else None
+                first_model_img = (str(first_sku_pic).strip() if first_sku_pic else primary_image_val)[:100]
 
                 m_name = (model_name or "").strip()[:100]
                 m_name_fr = (_translate_to_french(model_name, enabled=translate_enabled) or "").strip()[:100] or m_name
@@ -2122,8 +2132,8 @@ def _import_single_yuwi_go_product(
                     sku_cny = sku.get("price") if sku.get("price") not in [None, "", "null"] else normalized["raw_price_cny"]
                     variant_price_usd = _convert_cny_to_usd(sku_cny, cny_rate)
                     variant_prices.append(variant_price_usd)
-                    sku_pic = sku.get("picture")
-                    variant_image = str(sku_pic).strip() if sku_pic else primary_image_val
+                    sku_pic = _normalize_yiwugo_image_url(sku.get("picture"))
+                    variant_image = (str(sku_pic).strip() if sku_pic else primary_image_val)[:100]
 
                     v_name = (variant_name or "").strip()[:100]
                     v_name_fr = (_translate_to_french(variant_name, enabled=translate_enabled) or "").strip()[:100] or v_name
@@ -2498,9 +2508,11 @@ def _process_yuwi_go_items(
                 if (not img1_val or img1_val.startswith("image/product/image/")) and normalized.get("image_urls"):
                     for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
                         if url:
-                            setattr(existing_product, f"product_image_{idx}", str(url).strip()[:500])
-                            if f"product_image_{idx}" not in updated_fields:
-                                updated_fields.append(f"product_image_{idx}")
+                            clean_u = str(url).split("?")[0].strip()
+                            if len(clean_u) <= 100:
+                                setattr(existing_product, f"product_image_{idx}", clean_u)
+                                if f"product_image_{idx}" not in updated_fields:
+                                    updated_fields.append(f"product_image_{idx}")
 
                 # If existing product has CJK in English name, update with clean English title (max 100 chars)
                 if _contains_cjk(existing_product.product_name) and normalized.get("title") and not _contains_cjk(normalized["title"]):
@@ -2533,10 +2545,13 @@ def _process_yuwi_go_items(
                     for fld in [f for f in updated_fields if f.startswith("product_image_")]:
                         img_f = getattr(existing_product, fld, None)
                         img_val = img_f.name if hasattr(img_f, "name") else str(img_f)
-                        if img_val and not models.ProductImage.objects.filter(product=existing_product, image=img_val).exists():
-                            models.ProductImage.objects.create(product=existing_product, image=img_val)
+                        if img_val:
+                            clean_gal_img = str(img_val).split("?")[0].strip()[:100]
+                            if not models.ProductImage.objects.filter(product=existing_product, image=clean_gal_img).exists():
+                                models.ProductImage.objects.create(product=existing_product, image=clean_gal_img)
                     if existing_product.product_image_1:
                         p1_val = existing_product.product_image_1.name if hasattr(existing_product.product_image_1, "name") else str(existing_product.product_image_1)
+                        p1_val = str(p1_val).split("?")[0].strip()[:100]
                         models.ProductModel.objects.filter(
                             Q(model_image__isnull=True) | Q(model_image="") | Q(model_image__startswith="image/"),
                             product=existing_product,
