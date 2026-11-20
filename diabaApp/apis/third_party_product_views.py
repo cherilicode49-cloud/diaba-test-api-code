@@ -1979,37 +1979,50 @@ def _import_single_yuwi_go_product(
     if not product_name_french:
         product_name_french = product_name
 
+    # Protect against PostgreSQL character varying(100) DataError
+    safe_product_name = (product_name or "").strip()[:100].strip()
+    safe_product_name_french = (product_name_french or "").strip()[:100].strip() or safe_product_name
+    safe_product_code = (product_code or "").strip()[:100]
+
     description_french = _translate_to_french(normalized["description"], enabled=translate_enabled) or normalized["description"]
 
     packing = normalized.get("packing_bo") or {}
-    carton_length = normalized.get("carton_length") or normalized.get("length") or "10"
-    carton_width = normalized.get("carton_width") or normalized.get("width") or "10"
-    carton_height = normalized.get("carton_height") or normalized.get("height") or "5"
-    carton_weight = normalized.get("carton_weight") or normalized.get("weight") or "0.5"
+    carton_length = str(normalized.get("carton_length") or normalized.get("length") or "10").strip()[:50]
+    carton_width = str(normalized.get("carton_width") or normalized.get("width") or "10").strip()[:50]
+    carton_height = str(normalized.get("carton_height") or normalized.get("height") or "5").strip()[:50]
+    carton_weight = str(normalized.get("carton_weight") or normalized.get("weight") or "0.5").strip()[:50]
 
-    prod_length = normalized.get("length") or carton_length
-    prod_width = normalized.get("width") or carton_width
-    prod_height = normalized.get("height") or carton_height
-    prod_weight = normalized.get("weight") or carton_weight
-    packing_value = normalized.get("packing_quantity") or (str(packing.get("packingQuantity")) if packing.get("packingQuantity") not in [None, ""] else "1")
+    prod_length = str(normalized.get("length") or carton_length).strip()[:50]
+    prod_width = str(normalized.get("width") or carton_width).strip()[:50]
+    prod_height = str(normalized.get("height") or carton_height).strip()[:50]
+    prod_weight = str(normalized.get("weight") or carton_weight).strip()[:50]
+    packing_value = str(
+        normalized.get("packing_quantity")
+        or (packing.get("packingQuantity") if packing.get("packingQuantity") not in [None, ""] else "1")
+    ).strip()[:50]
 
     image_kwargs = {}
     # ALWAYS store direct image URLs (never upload to AWS S3)
     for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
         if url:
-            image_kwargs[f"product_image_{idx}"] = str(url).strip()
+            image_kwargs[f"product_image_{idx}"] = str(url).strip()[:500]
 
     with transaction.atomic():
+        avail_qty = str(normalized.get("available_quantity") or "").strip()[:50] or None
+        min_qty = str(normalized.get("min_order_quantity") or "1").strip()[:50]
+        max_qty = str(normalized.get("max_order_quantity") or "").strip()[:50] or None
+        uom = str(normalized.get("unit_of_measure") or "pcs").strip()[:50]
+
         product = models.ProductDetail(
-            product_name=product_name,
-            product_name_french=product_name_french,
-            product_code=product_code,
+            product_name=safe_product_name,
+            product_name_french=safe_product_name_french,
+            product_code=safe_product_code,
             vendor_id=vendor_obj.id if vendor_obj else None,
             category_id=category_obj.id if category_obj else None,
             subcategory_id=subcategory_obj.id if subcategory_obj else None,
             description=normalized["description"],
             description_french=description_french,
-            unit_of_measure=normalized["unit_of_measure"],
+            unit_of_measure=uom,
             length=prod_length,
             height=prod_height,
             width=prod_width,
@@ -2020,14 +2033,14 @@ def _import_single_yuwi_go_product(
             carton_height=carton_height,
             carton_weight=carton_weight,
             product_verification="Approved",
-            available_quantity=normalized.get("available_quantity"),
-            quantity=normalized.get("available_quantity"),
-            min_order_quantity=normalized["min_order_quantity"],
-            max_order_quantity=normalized.get("max_order_quantity"),
+            available_quantity=avail_qty,
+            quantity=avail_qty,
+            min_order_quantity=min_qty,
+            max_order_quantity=max_qty,
             product_packaging_value=packing_value,
             price=price_usd,
             discount="0",
-            final_price=str(price_usd),
+            final_price=str(price_usd)[:50],
             status=YUWI_GO_SOURCE,
             product_added_from=YUWI_GO_SOURCE,
             product_type_id=product_type_id,
@@ -2066,12 +2079,16 @@ def _import_single_yuwi_go_product(
         # Bulk create ProductOtherSpecification records
         spec_records = []
         for key, val in translated_specs:
+            k_en = (key or "").strip()[:100]
+            v_en = (val or "").strip()[:100]
+            k_fr = (_translate_to_french(key, enabled=translate_enabled) or "").strip()[:100] or k_en
+            v_fr = (_translate_to_french(val, enabled=translate_enabled) or "").strip()[:100] or v_en
             spec_records.append(models.ProductOtherSpecification(
                 product_id=product.id,
-                key=key,
-                key_french=_translate_to_french(key, enabled=translate_enabled),
-                value=val,
-                value_french=_translate_to_french(val, enabled=translate_enabled),
+                key=k_en,
+                key_french=k_fr,
+                value=v_en,
+                value_french=v_fr,
             ))
         if spec_records:
             try:
@@ -2089,10 +2106,12 @@ def _import_single_yuwi_go_product(
                 first_sku_pic = first_sku.get("picture") if first_sku else None
                 first_model_img = str(first_sku_pic).strip() if first_sku_pic else primary_image_val
 
+                m_name = (model_name or "").strip()[:100]
+                m_name_fr = (_translate_to_french(model_name, enabled=translate_enabled) or "").strip()[:100] or m_name
                 model_obj = models.ProductModel.objects.create(
                     product_id=product.id,
-                    model_name=model_name,
-                    model_name_french=_translate_to_french(model_name, enabled=translate_enabled),
+                    model_name=m_name,
+                    model_name_french=m_name_fr,
                     model_image=first_model_img,
                     status="Active",
                     is_deleted=False,
@@ -2106,13 +2125,15 @@ def _import_single_yuwi_go_product(
                     sku_pic = sku.get("picture")
                     variant_image = str(sku_pic).strip() if sku_pic else primary_image_val
 
+                    v_name = (variant_name or "").strip()[:100]
+                    v_name_fr = (_translate_to_french(variant_name, enabled=translate_enabled) or "").strip()[:100] or v_name
                     variant_objs.append(models.ProductModelVariant(
                         product_id=product.id,
                         model_id=model_obj.id,
-                        name=variant_name,
-                        name_french=_translate_to_french(variant_name, enabled=translate_enabled),
+                        name=v_name,
+                        name_french=v_name_fr,
                         image=variant_image,
-                        price=str(variant_price_usd),
+                        price=str(variant_price_usd)[:50],
                         variant_verification="Approved",
                         status="Active",
                         is_deleted=False,
@@ -2138,8 +2159,8 @@ def _import_single_yuwi_go_product(
                                 model_id=model_obj.id,
                                 vendor_id=vendor_obj.id,
                                 variant_id=vid,
-                                price=str(v_price),
-                                quantity=str(v_stock) if v_stock is not None else None,
+                                price=str(v_price)[:50],
+                                quantity=str(v_stock)[:50] if v_stock is not None else None,
                                 status="Active",
                             ))
                     if vpp_objs:
@@ -2150,8 +2171,8 @@ def _import_single_yuwi_go_product(
         else:
             model_obj = models.ProductModel.objects.create(
                 product_id=product.id,
-                model_name=product_name,
-                model_name_french=product_name_french,
+                model_name=safe_product_name,
+                model_name_french=safe_product_name_french,
                 model_image=primary_image_val,
                 status="Active",
                 is_deleted=False,
@@ -2159,10 +2180,10 @@ def _import_single_yuwi_go_product(
             variant_obj = models.ProductModelVariant.objects.create(
                 product_id=product.id,
                 model_id=model_obj.id,
-                name=product_name,
-                name_french=product_name_french,
+                name=safe_product_name,
+                name_french=safe_product_name_french,
                 image=primary_image_val,
-                price=str(price_usd),
+                price=str(price_usd)[:50],
                 variant_verification="Approved",
                 status="Active",
                 is_deleted=False,
@@ -2174,7 +2195,7 @@ def _import_single_yuwi_go_product(
                         model_id=model_obj.id,
                         vendor_id=vendor_obj.id,
                         variant_id=variant_obj.id,
-                        price=str(price_usd),
+                        price=str(price_usd)[:50],
                         status="Active",
                     )
                 except Exception as vpp_err:
@@ -2183,7 +2204,7 @@ def _import_single_yuwi_go_product(
         if price_usd == 0.0 and variant_prices:
             min_variant_price = min(variant_prices)
             product.price = min_variant_price
-            product.final_price = str(min_variant_price)
+            product.final_price = str(min_variant_price)[:50]
             product.save(update_fields=["price", "final_price"])
 
     return product
@@ -2440,7 +2461,8 @@ def _process_yuwi_go_items(
                 }
 
             # Duplicate check: matches either product_name or product_code
-            dup_query = Q(product_name__iexact=product_name)
+            safe_pname = (product_name or "").strip()[:100].strip()
+            dup_query = Q(product_name__iexact=safe_pname)
             if normalized.get("goods_code"):
                 dup_query |= Q(product_code=f"YWG_{normalized['goods_code']}")
             if normalized.get("source_id"):
@@ -2464,8 +2486,8 @@ def _process_yuwi_go_items(
                 c_wei = existing_product.carton_weight or normalized.get("carton_weight") or p_wei
 
                 for attr, val in [
-                    ("length", p_len), ("width", p_wid), ("height", p_hei), ("weight", p_wei),
-                    ("carton_length", c_len), ("carton_width", c_wid), ("carton_height", c_hei), ("carton_weight", c_wei),
+                    ("length", str(p_len)[:50]), ("width", str(p_wid)[:50]), ("height", str(p_hei)[:50]), ("weight", str(p_wei)[:50]),
+                    ("carton_length", str(c_len)[:50]), ("carton_width", str(c_wid)[:50]), ("carton_height", str(c_hei)[:50]), ("carton_weight", str(c_wei)[:50]),
                 ]:
                     if not getattr(existing_product, attr):
                         setattr(existing_product, attr, val)
@@ -2476,17 +2498,17 @@ def _process_yuwi_go_items(
                 if (not img1_val or img1_val.startswith("image/product/image/")) and normalized.get("image_urls"):
                     for idx, url in enumerate(normalized.get("image_urls", [])[:8], start=1):
                         if url:
-                            setattr(existing_product, f"product_image_{idx}", str(url).strip())
+                            setattr(existing_product, f"product_image_{idx}", str(url).strip()[:500])
                             if f"product_image_{idx}" not in updated_fields:
                                 updated_fields.append(f"product_image_{idx}")
 
-                # If existing product has CJK in English name, update with clean English title
+                # If existing product has CJK in English name, update with clean English title (max 100 chars)
                 if _contains_cjk(existing_product.product_name) and normalized.get("title") and not _contains_cjk(normalized["title"]):
-                    existing_product.product_name = normalized["title"]
+                    existing_product.product_name = (normalized["title"] or "").strip()[:100]
                     if "product_name" not in updated_fields:
                         updated_fields.append("product_name")
 
-                # If existing product is missing French name or has CJK or same as English, update it to French
+                # If existing product is missing French name or has CJK or same as English, update it to French (max 100 chars)
                 raw_t = normalized.get("raw_title")
                 needs_french_update = (
                     not existing_product.product_name_french
@@ -2500,7 +2522,7 @@ def _process_yuwi_go_items(
                     if not fr_t or _contains_cjk(fr_t):
                         fr_t = _translate_to_french(existing_product.product_name, enabled=translate_enabled)
                     if fr_t:
-                        existing_product.product_name_french = fr_t
+                        existing_product.product_name_french = (fr_t or "").strip()[:100]
                         if "product_name_french" not in updated_fields:
                             updated_fields.append("product_name_french")
 
