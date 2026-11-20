@@ -236,54 +236,45 @@ def get_shipping_cost(request):
 
 
 
-    # Fallback dimensions/weight from product or variant if missing
-
+    # Fallback dimensions/weight from variant or product if missing
     product_id = data.get("product_id") or data.get("product")
-
     variant_id = data.get("variant_id") or data.get("variant")
 
-    if variant_id and not product_id:
-
+    variant_obj = None
+    if variant_id:
         try:
-
             variant_obj = models.ProductModelVariant.objects.filter(id=variant_id).first()
-
-            if variant_obj and hasattr(variant_obj, 'model') and hasattr(variant_obj.model, 'product'):
-
-                product_id = variant_obj.model.product.id
-
+            if variant_obj and not product_id:
+                if variant_obj.product_id:
+                    product_id = variant_obj.product_id
+                elif hasattr(variant_obj, 'model') and hasattr(variant_obj.model, 'product'):
+                    product_id = variant_obj.model.product.id
         except Exception:
-
             pass
 
-
+    if variant_obj:
+        if carton_length in [None, '', '-', 0, '0'] and variant_obj.carton_length:
+            carton_length = variant_obj.carton_length
+        if carton_width in [None, '', '-', 0, '0'] and variant_obj.carton_width:
+            carton_width = variant_obj.carton_width
+        if carton_height in [None, '', '-', 0, '0'] and variant_obj.carton_height:
+            carton_height = variant_obj.carton_height
+        if carton_weight in [None, '', '-', 0, '0'] and variant_obj.carton_weight:
+            carton_weight = variant_obj.carton_weight
 
     if product_id:
-
         try:
-
             product_obj = models.ProductDetail.objects.filter(id=product_id).first()
-
             if product_obj:
-
                 if carton_length in [None, '', '-', 0, '0']:
-
                     carton_length = product_obj.carton_length
-
                 if carton_width in [None, '', '-', 0, '0']:
-
                     carton_width = product_obj.carton_width
-
                 if carton_height in [None, '', '-', 0, '0']:
-
                     carton_height = product_obj.carton_height
-
                 if carton_weight in [None, '', '-', 0, '0']:
-
                     carton_weight = product_obj.carton_weight
-
         except Exception:
-
             pass
 
 

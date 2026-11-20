@@ -307,9 +307,14 @@ def customer_verify(request):
                     login_time = date_time,
                 ).save()
                  
+                from diabaApp.auth_helper import generate_tokens_for_customer
+                tokens = generate_tokens_for_customer(customer)
                 res={
                     'message':"Verification completed successfully.", 
-                    'data':serializer
+                    'data':serializer,
+                    'token': tokens['access_token'],
+                    'access_token': tokens['access_token'],
+                    'refresh_token': tokens['refresh_token'],
                 }
                 return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
             else:
@@ -464,10 +469,15 @@ def social_login(request):
             ).save()
 
             
+            from diabaApp.auth_helper import generate_tokens_for_customer
+            tokens = generate_tokens_for_customer(customer)
             res={
                 'message':"You're successfully registerd.",
                 'data':serializer,
-                'new_user':True
+                'new_user':True,
+                'token': tokens['access_token'],
+                'access_token': tokens['access_token'],
+                'refresh_token': tokens['refresh_token'],
             }
             return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
         
@@ -528,10 +538,15 @@ def social_login(request):
             ).save()
 
             
+            from diabaApp.auth_helper import generate_tokens_for_customer
+            tokens = generate_tokens_for_customer(customer)
             res={
                 'message':"You're successfully login.",
                 'data':serializer,
-                'new_user':new_user
+                'new_user':new_user,
+                'token': tokens['access_token'],
+                'access_token': tokens['access_token'],
+                'refresh_token': tokens['refresh_token'],
             }
             return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
         else:

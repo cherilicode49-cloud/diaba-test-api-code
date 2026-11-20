@@ -538,6 +538,7 @@ def customer_wishlist_cart_list(request):
                 )
                 # cart_serializer = CartDetailSerializer(cart_data, many=True).data
                 cart_data_list = []
+                product_subtotals = {}
                 
                 if not models.CountryWithCurrency.objects.filter(Q(country_calling_code = user.countryCode) | Q(country_name = user.country)).exists():
                     country = "Egypt"
@@ -573,6 +574,7 @@ def customer_wishlist_cart_list(request):
 
                 total_price = 0.0
                 cart_data_list = []
+                product_subtotals = {}
                 list_air = []
                 list_ship = []
                 list_express = []
@@ -680,11 +682,12 @@ def customer_wishlist_cart_list(request):
                             price_by_express = price_by_express_shipping
 
                         per_product_cart_serializer['price_by_express'] = round(float(price_by_express), 2) if is_usd_cart else round(float(price_by_express))
-                    # print(price_by_express, 'price_by_expresspricvv afaf  product', product.product.carton_length, 'carton')
-                    carton_length=product.product.carton_length
-                    carton_width=product.product.carton_width
-                    carton_height=product.product.carton_height
-                    carton_weight=product.product.carton_weight
+                    # Prefer variant carton dimensions, fall back to product carton dimensions
+                    var_obj = getattr(product, 'variant', None)
+                    carton_length = (var_obj.carton_length if var_obj and var_obj.carton_length else None) or product.product.carton_length
+                    carton_width = (var_obj.carton_width if var_obj and var_obj.carton_width else None) or product.product.carton_width
+                    carton_height = (var_obj.carton_height if var_obj and var_obj.carton_height else None) or product.product.carton_height
+                    carton_weight = (var_obj.carton_weight if var_obj and var_obj.carton_weight else None) or product.product.carton_weight
                     quantity=product.quantity
                     # print(carton_length, 'carton_length', carton_width,'carton_width',  carton_height, 'carton_height', carton_weight,'carton_weight',  quantity, 'quantity' )
                     # print("carton_length----->",carton_length)
@@ -702,6 +705,8 @@ def customer_wishlist_cart_list(request):
                     
                     product_total = float(quantity) * float(per_product_cart_serializer.get('price'))
                     list_product_amount.append(product_total)
+                    if product.product:
+                        product_subtotals[product.product.id] = product_subtotals.get(product.product.id, 0.0) + product_total
                     
                     per_product_cart_serializer['shipping_cost_per_product'] = shipping_cost_per_product
                     per_product_cart_serializer['product_total'] = round(float(product_total), 2) if is_usd_cart else round(float(product_total))
@@ -741,56 +746,176 @@ def customer_wishlist_cart_list(request):
                         else:
                             tracking_amount = round(usd_tracking, 2) if is_usd_cart else 1000
 
-                if promocode:
-                    check_promocode = models.PromocodeDetail.objects.filter(promocode = promocode).count()
-                    if check_promocode == 1:
-                        get_promocode = models.PromocodeDetail.objects.get(promocode = promocode)
-                        discount = get_promocode.discount
-                        if is_usd_cart:
-                            discount_price = round(float(total_price) * float(discount) / 100, 2)
-                            price_after_discount = round(total_price - discount_price, 2)
-                            amount_to_paid = round(price_after_discount + total_air + total_ship + total_express, 2)
-                            amount_to_paid_with_tax = round(amount_to_paid * 1.025, 2)
-                            view_fmt = lambda v: f"{float(v):,.2f}".replace(",", " ")
-                        else:
-                            discount_price = round(float(total_price) * float(discount) / 100)
-                            price_after_discount = round(float(total_price) - float(discount_price))
-                            amount_to_paid = round(float(price_after_discount) + float(total_air) + float(total_ship) + float(total_express))
-                            amount_to_paid_with_tax = round(float(amount_to_paid) * 1.025)
-                            view_fmt = lambda v: f"{round(float(v)):,}".replace(",", " ")
+                promocodes_input = python_data.get('promocodes') or python_data.get('promocode')
+                raw_promo_list = []
+                if isinstance(promocodes_input, list):
+                    for p in promocodes_input:
+                        if p and str(p).strip():
+                            raw_promo_list.append(str(p).strip())
+                elif isinstance(promocodes_input, str) and promocodes_input.strip():
+                    for p in promocodes_input.split(','):
+                        if p and str(p).strip():
+                            raw_promo_list.append(str(p).strip())
 
-                        res={
-                            'data':cart_data_list,
-                            'total_price': view_fmt(total_price),
-                            'discount_price': view_fmt(discount_price),
-                            'discount_percentage': discount,
-                            'price_after_discount': view_fmt(price_after_discount),
-                            'total_air': view_fmt(total_air),
-                            'total_ship': view_fmt(total_ship),
-                            'total_express': view_fmt(total_express),
-                            'tracking_amount': tracking_amount,
-                            'tracking_amount_view': view_fmt(tracking_amount),
-                            'amount_to_paid_view': view_fmt(amount_to_paid),
-                            'tax_percentage': 2.5,
-                            'amount_to_paid_with_tax_view': view_fmt(amount_to_paid_with_tax),
-                            'amount_to_paid': amount_to_paid,
-                            'amount_to_paid_with_tax': amount_to_paid_with_tax,
-                            'coupon_verify':True
+                view_fmt = (lambda v: f"{float(v):,.2f}".replace(",", " ")) if is_usd_cart else (lambda v: f"{round(float(v)):,}".replace(",", " "))
+
+                if raw_promo_list:
+                    applied_promocodes = []
+                    invalid_promocodes = []
+                    product_discounts_applied = {}
+                    overall_discount_applied = None
+                    total_discount_price = 0.0
+
+                    seen_codes = set()
+                    for p_name in raw_promo_list:
+                        norm_p = p_name.upper().strip()
+                        if norm_p in seen_codes:
+                            continue
+                        seen_codes.add(norm_p)
+
+                        promo_obj = models.PromocodeDetail.objects.filter(promocode__iexact=p_name).first()
+                        if not promo_obj:
+                            invalid_promocodes.append({'promocode': p_name, 'reason': 'Enter valid coupon.'})
+                            continue
+
+                        if promo_obj.status != 'Active':
+                            invalid_promocodes.append({'promocode': p_name, 'reason': 'Promocode is inactive.'})
+                            continue
+
+                        if promo_obj.remaining_promocode not in [None, '', 'null']:
+                            try:
+                                if int(promo_obj.remaining_promocode) <= 0:
+                                    invalid_promocodes.append({'promocode': p_name, 'reason': 'Promocode usage limit reached.'})
+                                    continue
+                            except Exception:
+                                pass
+
+                        if promo_obj.expiry_date:
+                            try:
+                                exp_str = str(promo_obj.expiry_date).split(',')[0].strip()
+                                exp_d = datetime.strptime(exp_str, '%Y-%m-%d').date()
+                                if datetime.now().date() > exp_d:
+                                    invalid_promocodes.append({'promocode': p_name, 'reason': 'Promocode has expired.'})
+                                    continue
+                            except Exception:
+                                pass
+
+                        try:
+                            disc_pct = float(promo_obj.discount or 0)
+                        except Exception:
+                            disc_pct = 0.0
+
+                        if disc_pct <= 0:
+                            invalid_promocodes.append({'promocode': p_name, 'reason': 'Invalid discount percentage.'})
+                            continue
+
+                        # Case 1: Product-Wise Promocode (1 product, 1 promo code, 1 influencer)
+                        if promo_obj.product_id:
+                            target_pid = promo_obj.product_id
+                            if target_pid not in product_subtotals:
+                                p_title = promo_obj.product.product_name if promo_obj.product else f'Product #{target_pid}'
+                                invalid_promocodes.append({
+                                    'promocode': promo_obj.promocode,
+                                    'reason': f"Only valid for product '{p_title}', which is not in your cart."
+                                })
+                                continue
+
+                            if target_pid in product_discounts_applied:
+                                invalid_promocodes.append({
+                                    'promocode': promo_obj.promocode,
+                                    'reason': f"A promocode is already applied for this product."
+                                })
+                                continue
+
+                            prod_subtotal = product_subtotals[target_pid]
+                            p_disc = round(float(prod_subtotal) * disc_pct / 100.0, 2) if is_usd_cart else round(float(prod_subtotal) * disc_pct / 100.0)
+                            product_discounts_applied[target_pid] = p_disc
+                            total_discount_price += p_disc
+
+                            applied_promocodes.append({
+                                'id': promo_obj.id,
+                                'promocode': promo_obj.promocode,
+                                'type': 'Product',
+                                'product_id': target_pid,
+                                'product_name': promo_obj.product.product_name if promo_obj.product else None,
+                                'discount_percentage': promo_obj.discount,
+                                'discount_amount': p_disc,
+                                'discount_amount_view': view_fmt(p_disc),
+                            })
+
+                        # Case 2: Overall Promocode (Option A: 1 overall code allowed on remaining eligible balance)
+                        else:
+                            if overall_discount_applied is not None:
+                                invalid_promocodes.append({
+                                    'promocode': promo_obj.promocode,
+                                    'reason': 'Only one overall cart promocode can be applied.'
+                                })
+                                continue
+
+                            remaining_balance = max(0.0, float(total_price) - total_discount_price)
+                            ov_disc = round(float(remaining_balance) * disc_pct / 100.0, 2) if is_usd_cart else round(float(remaining_balance) * disc_pct / 100.0)
+                            total_discount_price += ov_disc
+                            overall_discount_applied = {
+                                'id': promo_obj.id,
+                                'promocode': promo_obj.promocode,
+                                'type': 'Overall',
+                                'product_id': None,
+                                'product_name': None,
+                                'discount_percentage': promo_obj.discount,
+                                'discount_amount': ov_disc,
+                                'discount_amount_view': view_fmt(ov_disc),
+                            }
+                            applied_promocodes.append(overall_discount_applied)
+
+                    if not applied_promocodes and invalid_promocodes:
+                        res = {
+                            'message': invalid_promocodes[0]['reason'],
+                            'invalid_promocodes': invalid_promocodes,
                         }
+                        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=406)
+
+                    if is_usd_cart:
+                        total_discount_price = round(total_discount_price, 2)
+                        price_after_discount = round(max(0.0, float(total_price) - total_discount_price), 2)
+                        amount_to_paid = round(price_after_discount + total_air + total_ship + total_express, 2)
+                        amount_to_paid_with_tax = round(amount_to_paid * 1.025, 2)
                     else:
-                        res={
-                            'message':'Enter valid coupon.'
-                        }
-                        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=406)
+                        total_discount_price = round(total_discount_price)
+                        price_after_discount = round(max(0.0, float(total_price) - float(total_discount_price)))
+                        amount_to_paid = round(float(price_after_discount) + float(total_air) + float(total_ship) + float(total_express))
+                        amount_to_paid_with_tax = round(float(amount_to_paid) * 1.025)
+
+                    primary_promo_name = applied_promocodes[0]['promocode'] if applied_promocodes else None
+                    primary_discount_pct = applied_promocodes[0]['discount_percentage'] if applied_promocodes else '0'
+
+                    res = {
+                        'data': cart_data_list,
+                        'total_price': view_fmt(total_price),
+                        'discount_price': view_fmt(total_discount_price),
+                        'discount_percentage': primary_discount_pct,
+                        'price_after_discount': view_fmt(price_after_discount),
+                        'total_air': view_fmt(total_air),
+                        'total_ship': view_fmt(total_ship),
+                        'total_express': view_fmt(total_express),
+                        'tracking_amount': tracking_amount,
+                        'tracking_amount_view': view_fmt(tracking_amount),
+                        'amount_to_paid_view': view_fmt(amount_to_paid),
+                        'tax_percentage': 2.5,
+                        'amount_to_paid_with_tax_view': view_fmt(amount_to_paid_with_tax),
+                        'amount_to_paid': amount_to_paid,
+                        'amount_to_paid_with_tax': amount_to_paid_with_tax,
+                        'coupon_verify': True if applied_promocodes else False,
+                        'applied_promocodes': applied_promocodes,
+                        'invalid_promocodes': invalid_promocodes,
+                        'promocode_name': primary_promo_name,
+                    }
                 else:
                     if is_usd_cart:
                         amount_to_paid = round(total_price + total_air + total_ship + total_express, 2)
                         amount_to_paid_with_tax = round(amount_to_paid * 1.025, 2)
-                        view_fmt = lambda v: f"{float(v):,.2f}".replace(",", " ")
                     else:
                         amount_to_paid = round(float(total_price) + float(total_air) + float(total_ship) + float(total_express))
                         amount_to_paid_with_tax = round(float(amount_to_paid) * 1.025)
-                        view_fmt = lambda v: f"{round(float(v)):,}".replace(",", " ")
                     print(tracking_amount, 'tracking_amount')
                     res={
                         'data':cart_data_list,

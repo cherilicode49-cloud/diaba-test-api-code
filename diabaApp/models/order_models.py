@@ -11,6 +11,7 @@ from datetime import datetime
 class OrderDetail(models.Model):
     customer = models.ForeignKey('diabaApp.CustomerDetail', null=True,verbose_name="customer", on_delete=models.SET_NULL)
     promocode = models.ForeignKey('diabaApp.PromocodeDetail', null=True, on_delete=models.SET_NULL)
+    promocodes = models.ManyToManyField('diabaApp.PromocodeDetail', blank=True, related_name='orders', verbose_name='promocodes')
     customer_address = models.ForeignKey('diabaApp.CustomerAddressDetail', null=True,verbose_name="CustomerAddressDetail", on_delete=models.SET_NULL)
     cargo = models.ForeignKey('diabaApp.CargoDetail', null=True,verbose_name="CargoDetail", on_delete=models.SET_NULL)
     order_id = models.CharField(max_length=100, verbose_name="order_id ")

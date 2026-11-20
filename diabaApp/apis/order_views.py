@@ -33,6 +33,146 @@ from diabaApp.serializer import ProductOrderDetailOrderSerializer, OrderDetailSe
 from diabaApp.utils import track_user_activity
 
 
+def _handle_order_promocodes_and_commissions(order, promocodes_input, currency_name, original_total_amount, original_amount_paid, date_time=None):
+    """
+    Process multiple promo codes on an order:
+    - Extracts list of promo codes (comma-separated or list)
+    - Validates and links each to order (both order.promocode and order.promocodes M2M)
+    - Records PromocodeTracking per promocode
+    - Decrements remaining_promocode count
+    - Calculates and records PromocodeCommissionDetail:
+        * Product-wise: commission is based on that specific product's order revenue
+        * Overall: commission is based on order original_amount_paid
+    Returns (primary_promocode_name, primary_promocode_discount, applied_promocodes_list)
+    """
+    if not date_time:
+        date_time = datetime.now().strftime('%Y-%m-%d, %H:%M:%S')
+
+    raw_promo_list = []
+    if isinstance(promocodes_input, list):
+        for p in promocodes_input:
+            if p and str(p).strip():
+                raw_promo_list.append(str(p).strip())
+    elif isinstance(promocodes_input, str) and promocodes_input.strip():
+        for p in promocodes_input.split(','):
+            if p and str(p).strip():
+                raw_promo_list.append(str(p).strip())
+
+    primary_name = None
+    primary_discount = None
+    applied_list = []
+
+    if not raw_promo_list:
+        return primary_name, primary_discount, applied_list
+
+    # Map ordered products to total revenue in this order
+    product_orders = models.ProductOrderDetail.objects.filter(order=order)
+    product_sales_map = {}
+    for po in product_orders:
+        try:
+            p_price = float(po.price or 0)
+            p_qty = float(po.quantity or 1)
+            product_sales_map[po.product_id] = product_sales_map.get(po.product_id, 0.0) + (p_price * p_qty)
+        except Exception:
+            pass
+
+    seen_ids = set()
+    for p_name in raw_promo_list:
+        promo_obj = models.PromocodeDetail.objects.filter(promocode__iexact=p_name).first()
+        if not promo_obj or promo_obj.id in seen_ids:
+            continue
+        seen_ids.add(promo_obj.id)
+
+        try:
+            order.promocodes.add(promo_obj)
+        except Exception:
+            pass
+
+        if not order.promocode:
+            order.promocode = promo_obj
+            order.save(update_fields=['promocode'])
+
+        if not primary_name:
+            primary_name = promo_obj.promocode
+            primary_discount = promo_obj.discount
+
+        applied_list.append(promo_obj)
+
+        # Decrement remaining count
+        if promo_obj.remaining_promocode not in [None, '', 'null']:
+            try:
+                rem = int(promo_obj.remaining_promocode)
+                if rem > 0:
+                    promo_obj.remaining_promocode = str(rem - 1)
+                    promo_obj.save(update_fields=['remaining_promocode'])
+            except Exception:
+                pass
+
+        # Create PromocodeTracking
+        try:
+            models.PromocodeTracking.objects.create(
+                order_id=order.id,
+                promocode_id=promo_obj.id,
+                customer_id=order.customer_id,
+                created_at=date_time
+            )
+        except Exception as e:
+            print("PromocodeTracking create error:", e)
+
+        # Calculate and record Commission if influencer exists
+        if promo_obj.influencer and promo_obj.influencer.commission:
+            try:
+                comm_pct = int(promo_obj.influencer.commission)
+            except Exception:
+                comm_pct = 0
+
+            if comm_pct > 0:
+                try:
+                    clean_orig_total = float(str(original_total_amount).replace(' ', '').strip())
+                except Exception:
+                    clean_orig_total = 0.0
+
+                try:
+                    clean_orig_paid = float(str(original_amount_paid).replace(' ', '').strip())
+                except Exception:
+                    clean_orig_paid = clean_orig_total
+
+                if promo_obj.product_id:
+                    base_sales = product_sales_map.get(promo_obj.product_id, clean_orig_paid)
+                else:
+                    base_sales = clean_orig_paid
+
+                if currency_name == "XOF":
+                    converted_curr = "XOF"
+                    converted_paid = int(base_sales)
+                    converted_total = int(clean_orig_total)
+                else:
+                    xof_rate_row = models.CurrencyConverter.objects.filter(currency_code="XOF").values_list('system_rate', flat=True).first()
+                    xof_rate = float(xof_rate_row) if xof_rate_row else 589.0
+                    converted_curr = "XOF"
+                    converted_total = round(float(clean_orig_total) * xof_rate)
+                    converted_paid = round(float(base_sales) * xof_rate)
+
+                total_comm = round((converted_paid * comm_pct) / 100.0)
+
+                models.PromocodeCommissionDetail.objects.create(
+                    order_id=order.id,
+                    promocode_id=promo_obj.id,
+                    product_id=promo_obj.product_id,
+                    original_currency=currency_name,
+                    original_total_amount=str(int(clean_orig_total)),
+                    original_amount_paid=str(int(base_sales)),
+                    converted_currency=converted_curr,
+                    converted_total_amount=str(converted_total),
+                    converted_amount_paid=str(converted_paid),
+                    commission_percentage=str(comm_pct),
+                    total_commission=str(total_comm),
+                    created_at=date_time
+                )
+
+    return primary_name, primary_discount, applied_list
+
+
 
 @csrf_exempt
 def order_create(request):
@@ -143,11 +283,10 @@ def order_create(request):
         
         order_number = "ord-diaba-"+ current_date +'-'+ random_data
 
-        if promocode:
-            promocode = models.PromocodeDetail.objects.get(promocode = promocode)
-            promocode_id = promocode.id
-        else:
-            promocode_id = None
+        promocodes_input = python_data.get("promocodes") or python_data.get("promocode")
+        first_promo_str = (promocodes_input[0] if isinstance(promocodes_input, list) else str(promocodes_input or '')).split(',')[0].strip()
+        first_promo_obj = models.PromocodeDetail.objects.filter(promocode__iexact=first_promo_str).first() if first_promo_str else None
+        promocode_id = first_promo_obj.id if first_promo_obj else None
 
         order = models.OrderDetail.objects.create(
             customer_id = customer,
@@ -325,61 +464,14 @@ def order_create(request):
             cart_data = models.CartDetail.objects.filter(customer = customer)
             cart_data.delete()
             
-        promocode_name = None
-        promocode_discount = None
-
-        if order.promocode != None:
-            promocode_data = models.PromocodeDetail.objects.get(id = order.promocode.id)
-            # remaining_promocode = int(promocode_data.remaining_promocode) - 1
-            # promocode_data.remaining_promocode = remaining_promocode
-            # promocode_data.save()
-            promocode_name = promocode_data.promocode
-            promocode_discount = promocode_data.discount
-
-
-
-            promocode_track = models.PromocodeTracking.objects.create(
-                order_id = order_id,
-                promocode_id = order.promocode.id,
-                customer_id = order.customer.id,
-                created_at = date_time
-            ).save()
-
-            promocode = order.promocode.id
-            # order_id = order_id
-
-            commission_percentage = int(order.promocode.influencer.commission)
-            original_currency = currency_name
-            original_total_amount = original_total_amount
-            original_total_amount = int(original_total_amount.replace(' ', '').strip())
-            original_amount_paid = original_amount_paid
-            original_amount_paid = int(original_amount_paid.replace(' ', '').strip())
-            if original_currency == "XOF":
-                converted_currency = original_currency
-                converted_total_amount = original_total_amount
-                converted_amount_paid = int(original_amount_paid)
-            else:
-                get_currency_rate = models.CurrencyConverter.objects.filter(currency_code = "XOF").values_list('system_rate', flat=True)[0]
-                
-                converted_currency = "XOF"
-                converted_total_amount = float(original_total_amount)*float(get_currency_rate)
-                converted_amount_paid = int(float(original_amount_paid)*float(get_currency_rate))
-            
-            total_commission = round((converted_amount_paid*commission_percentage)/100)
-
-            create_commission = models.PromocodeCommissionDetail.objects.create(
-                order_id = order_id,
-                promocode_id = promocode,
-                original_currency = original_currency,
-                original_total_amount = original_total_amount,
-                original_amount_paid = original_amount_paid,
-                converted_currency = converted_currency,
-                converted_total_amount = converted_total_amount,
-                converted_amount_paid = converted_amount_paid,
-                commission_percentage = commission_percentage,
-                total_commission = total_commission,
-                created_at = date_time
-            ).save()
+        promocode_name, promocode_discount, applied_promos = _handle_order_promocodes_and_commissions(
+            order=order,
+            promocodes_input=promocodes_input,
+            currency_name=currency_name,
+            original_total_amount=original_total_amount,
+            original_amount_paid=original_amount_paid,
+            date_time=date_time
+        )
 
         # order_list_product
         order_data = models.ProductOrderDetail.objects.filter(order_id = order_id)
@@ -592,11 +684,10 @@ def order_create_wave_orange(request):
         
         order_number = "ord-diaba-"+ current_date +'-'+ random_data
 
-        if promocode:
-            promocode = models.PromocodeDetail.objects.get(promocode = promocode)
-            promocode_id = promocode.id
-        else:
-            promocode_id = None
+        promocodes_input = python_data.get("promocodes") or python_data.get("promocode")
+        first_promo_str = (promocodes_input[0] if isinstance(promocodes_input, list) else str(promocodes_input or '')).split(',')[0].strip()
+        first_promo_obj = models.PromocodeDetail.objects.filter(promocode__iexact=first_promo_str).first() if first_promo_str else None
+        promocode_id = first_promo_obj.id if first_promo_obj else None
 
         order = models.OrderDetail.objects.create(
             customer_id = customer,
@@ -762,57 +853,14 @@ def order_create_wave_orange(request):
         cart_data = models.CartDetail.objects.filter(customer = customer)
         cart_data.delete()
             
-        promocode_name = None
-        promocode_discount = None
-
-        if order.promocode != None:
-            promocode_data = models.PromocodeDetail.objects.get(id = order.promocode.id)
-            promocode_name = promocode_data.promocode
-            promocode_discount = promocode_data.discount
-
-
-
-            promocode_track = models.PromocodeTracking.objects.create(
-                order_id = order_id,
-                promocode_id = order.promocode.id,
-                customer_id = order.customer.id,
-                created_at = date_time
-            ).save()
-
-            promocode = order.promocode.id
-           
-            commission_percentage = int(order.promocode.influencer.commission)
-            original_currency = currency_name
-            original_total_amount = original_total_amount
-            original_total_amount = int(original_total_amount.replace(' ', '').strip())
-            original_amount_paid = original_amount_paid
-            original_amount_paid = int(original_amount_paid.replace(' ', '').strip())
-            if original_currency == "XOF":
-                converted_currency = original_currency
-                converted_total_amount = original_total_amount
-                converted_amount_paid = int(original_amount_paid)
-            else:
-                get_currency_rate = models.CurrencyConverter.objects.filter(currency_code = "XOF").values_list('system_rate', flat=True)[0]
-                
-                converted_currency = "XOF"
-                converted_total_amount = float(original_total_amount)*float(get_currency_rate)
-                converted_amount_paid = int(float(original_amount_paid)*float(get_currency_rate))
-            
-            total_commission = round((converted_amount_paid*commission_percentage)/100)
-
-            create_commission = models.PromocodeCommissionDetail.objects.create(
-                order_id = order_id,
-                promocode_id = promocode,
-                original_currency = original_currency,
-                original_total_amount = original_total_amount,
-                original_amount_paid = original_amount_paid,
-                converted_currency = converted_currency,
-                converted_total_amount = converted_total_amount,
-                converted_amount_paid = converted_amount_paid,
-                commission_percentage = commission_percentage,
-                total_commission = total_commission,
-                created_at = date_time
-            ).save()
+        promocode_name, promocode_discount, applied_promos = _handle_order_promocodes_and_commissions(
+            order=order,
+            promocodes_input=promocodes_input,
+            currency_name=currency_name,
+            original_total_amount=original_total_amount,
+            original_amount_paid=original_amount_paid,
+            date_time=date_time
+        )
 
         # order_list_product
         order_data = models.ProductOrderDetail.objects.filter(order_id = order_id)
@@ -1044,8 +1092,15 @@ def inquiry_order_create(request):
             cart_data = models.CartDetail.objects.filter(customer = customer)
             cart_data.delete()
             
-        promocode_name = None
-        promocode_discount = None
+        promocodes_input = python_data.get("promocodes") or python_data.get("promocode")
+        promocode_name, promocode_discount, applied_promos = _handle_order_promocodes_and_commissions(
+            order=order,
+            promocodes_input=promocodes_input,
+            currency_name=currency_name,
+            original_total_amount=original_total_amount,
+            original_amount_paid=original_amount_paid,
+            date_time=date_time
+        )
 
         order_data = models.ProductOrderDetail.objects.filter(order_id = order_id)
         order_list_product = ProductOrderDetailOrderSerializer(order_data,many=True).data
@@ -1421,14 +1476,20 @@ def order_detail_admin(request):
             list_data.append(product_data)
         
         promocode_data = None
+        promocode_list_data = []
         if order_data.promocode != None:
             all_promocode = models.PromocodeDetail.objects.get(id = order_data.promocode.id)
             promocode_data = PromocodeDetailSerializer(all_promocode).data 
+        if hasattr(order_data, 'promocodes') and order_data.promocodes.exists():
+            promocode_list_data = PromocodeDetailSerializer(order_data.promocodes.all(), many=True).data
+        elif promocode_data:
+            promocode_list_data = [promocode_data]
 
         res={
             'data':order_serializer,
             'product_data':list_data,
-            'promocode_data':promocode_data
+            'promocode_data':promocode_data,
+            'promocodes':promocode_list_data
         }
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
 

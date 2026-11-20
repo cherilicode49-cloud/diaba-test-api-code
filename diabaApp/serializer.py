@@ -525,7 +525,9 @@ class ProductModelVariantSerializerAdmin(serializers.ModelSerializer):
     class Meta:
         model = models.ProductModelVariant
         fields = ['id','product','model','name','name_french','variant_name_french',
-                  'image','price','variant_verification','status','price']
+                  'image','price','variant_verification','status',
+                  'length','height','width','weight',
+                  'carton_length','carton_width','carton_height','carton_weight']
         
 class ProductModelVariantSerializer(serializers.ModelSerializer):
     variant_name_french = serializers.ReadOnlyField(source = 'name_french')
@@ -537,7 +539,9 @@ class ProductModelVariantSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.ProductModelVariant
         fields = ['id','product','model','name','name_french','variant_name_french',
-                  'image','price','variant_verification','status','currency','price']
+                  'image','price','variant_verification','status','currency',
+                  'length','height','width','weight',
+                  'carton_length','carton_width','carton_height','carton_weight']
 
     def get_currency(self, obj):
         country = self.context.get('country','Egypt')
@@ -1078,7 +1082,9 @@ class VendorProductDataSerializer(serializers.ModelSerializer):
 class AdminProductModelVariantSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.ProductModelVariant
-        fields = ['id','model','name','image','price','status']
+        fields = ['id','model','name','image','price','status',
+                  'length','height','width','weight',
+                  'carton_length','carton_width','carton_height','carton_weight']
 
 class AdminProductModelSerializer(serializers.ModelSerializer):
     variants = serializers.SerializerMethodField()
@@ -2206,10 +2212,19 @@ class InfluencerDetailSerializer(serializers.ModelSerializer):
   
 class PromocodeDetailSerializer(serializers.ModelSerializer):  
     influencer_name = serializers.ReadOnlyField(source='influencer.name')
+    product_name = serializers.ReadOnlyField(source='product.product_name')
+    product_code = serializers.ReadOnlyField(source='product.product_code')
+    product_image = serializers.SerializerMethodField()
 
     class Meta:
         model = models.PromocodeDetail
-        fields =  '__all__'
+        fields = '__all__'
+
+    def get_product_image(self, obj):
+        if obj.product and obj.product.product_image_1:
+            val = obj.product.product_image_1
+            return val.url if hasattr(val, 'url') else str(val)
+        return None
 
 
   

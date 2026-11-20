@@ -21,6 +21,8 @@ class InfluencerDetail(models.Model):
 
 class PromocodeDetail(models.Model):
     influencer = models.ForeignKey(InfluencerDetail, blank=True, null=True, on_delete=models.CASCADE)
+    product = models.ForeignKey("diabaApp.ProductDetail", blank=True, null=True, on_delete=models.CASCADE, verbose_name="Product")
+    promocode_type = models.CharField(max_length=20, default='Overall', verbose_name="Promocode Type")
     promocode = models.CharField(max_length=200, verbose_name="promocode",  null=True)
     no_of_promocode = models.CharField(max_length=35, verbose_name="no_of_promocode",  null=True)
     remaining_promocode = models.CharField(max_length=35, verbose_name="remaining_promocode",  null=True)
@@ -57,6 +59,7 @@ class PromocodeCommissionDetail(models.Model):
     )
     # order = models.ForeignKey(OrderDetail, null=True,verbose_name="OrderDetail", on_delete=models.SET_NULL)
     promocode = models.ForeignKey(PromocodeDetail, null=True,verbose_name="variant", on_delete=models.CASCADE)
+    product = models.ForeignKey("diabaApp.ProductDetail", blank=True, null=True, on_delete=models.SET_NULL, verbose_name="Product")
     original_currency = models.CharField(max_length=100, verbose_name="original_currency",null=True,)
     original_total_amount = models.CharField(max_length=100, verbose_name="original_total_amount",null=True,)
     original_amount_paid = models.CharField(max_length=100, verbose_name="original_amount_paid",null=True,)

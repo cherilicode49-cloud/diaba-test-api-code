@@ -1,11 +1,20 @@
-import faiss
+try:
+    import faiss
+except ImportError:
+    faiss = None
 import numpy as np
 from threading import Lock
 from . import models
-import torch
-import torchvision.models as torchmodels
-import torchvision.transforms as transforms
-import clip
+try:
+    import torch
+    import torchvision.models as torchmodels
+    import torchvision.transforms as transforms
+    import clip
+except ImportError:
+    torch = None
+    torchmodels = None
+    transforms = None
+    clip = None
 import os
 import time
 
@@ -20,10 +29,13 @@ FAISS_REBUILDING = False
 CACHE_CATEGORIES = []
 TEXT_FEATURES = None
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda" if (torch and torch.cuda.is_available()) else "cpu"
 try:
-    clip_model, preprocess = clip.load("ViT-B/32", device=device)
-    feature_extractor = torch.nn.Sequential(*list(clip_model.children())[:-1]).to(device)
+    if clip:
+        clip_model, preprocess = clip.load("ViT-B/32", device=device)
+        feature_extractor = torch.nn.Sequential(*list(clip_model.children())[:-1]).to(device)
+    else:
+        clip_model, preprocess, feature_extractor = None, None, None
 except (MemoryError, Exception) as e:
     print(f"Warning: Could not load CLIP model in faiss_store ({e}).")
     clip_model, preprocess, feature_extractor = None, None, None

@@ -161,36 +161,59 @@ def promocode_create(request):
         python_data = JSONParser().parse(io.BytesIO(request.body))
 
         influencer = python_data.get('influencer')
-        promocode = python_data.get('promocode')
+        promocode = str(python_data.get('promocode') or "").strip()
         no_of_promocode = python_data.get('no_of_promocode')
         expiry_date = python_data.get('expiry_date')
         discount = python_data.get('discount')
+        product_id = python_data.get('product') or python_data.get('product_id')
 
-        now = datetime.now()
-        date_time = now.strftime('%Y-%m-%d, %H:%M:%S')
+        if not promocode:
+            return HttpResponse(JSONRenderer().render({'message': 'Promocode name is required.'}), content_type='application/json', status=400)
 
-        check_promocode = models.PromocodeDetail.objects.filter(promocode = promocode).count()
-        if check_promocode == 0:
-            promocode_create = models.PromocodeDetail.objects.create(
-                influencer_id = influencer,
-                promocode = promocode,
-                no_of_promocode = no_of_promocode,
-                remaining_promocode = no_of_promocode,
-                expiry_date = expiry_date,
-                discount = discount,
-                status = 'Active',
-                created_at = datetime.now()
-            ).save()
+        promocode_type = 'Product' if product_id not in [None, '', 'null'] else 'Overall'
+        product_obj = None
 
-            res={
-                'message':"Promocode Create successfully."
-            }
-            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
-        else:
-            res={
-                'message':"Promocode with this name already exists."
-            }
-            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=406)
+        if promocode_type == 'Product':
+            product_obj = models.ProductDetail.objects.filter(id=product_id, is_deleted=False).first()
+            if not product_obj:
+                return HttpResponse(JSONRenderer().render({'message': 'Invalid product ID. Product does not exist.'}), content_type='application/json', status=400)
+
+            # Enforce 1 product : 1 promo code : 1 influencer
+            existing_active = models.PromocodeDetail.objects.filter(product_id=product_id, status='Active').first()
+            if existing_active:
+                return HttpResponse(
+                    JSONRenderer().render({
+                        'message': f"An active promocode '{existing_active.promocode}' already exists for product '{product_obj.product_name}'."
+                    }),
+                    content_type='application/json',
+                    status=406
+                )
+
+        if models.PromocodeDetail.objects.filter(promocode__iexact=promocode).exists():
+            return HttpResponse(JSONRenderer().render({'message': 'Promocode with this name already exists.'}), content_type='application/json', status=406)
+
+        promocode_obj = models.PromocodeDetail.objects.create(
+            influencer_id=influencer,
+            product_id=product_id if promocode_type == 'Product' else None,
+            promocode_type=promocode_type,
+            promocode=promocode,
+            no_of_promocode=no_of_promocode,
+            remaining_promocode=no_of_promocode,
+            expiry_date=expiry_date,
+            discount=discount,
+            status='Active',
+            created_at=datetime.now(),
+        )
+
+        res = {
+            'message': 'Promocode created successfully.',
+            'id': promocode_obj.id,
+            'promocode': promocode_obj.promocode,
+            'promocode_type': promocode_type,
+            'product_id': product_id if promocode_type == 'Product' else None,
+            'product_name': product_obj.product_name if product_obj else None,
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
 
                         
 @csrf_exempt

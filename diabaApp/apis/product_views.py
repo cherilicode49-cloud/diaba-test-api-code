@@ -561,6 +561,15 @@ def product_model_variant_create(request):
                             jpg_name = base_name + ".jpg"
                             variant_image = ContentFile(buffer.read(), name=jpg_name)
 
+                    v_len = str(python_data.get(f'models[{i}][variants][{j}][length]') or length or '')[:50] or None
+                    v_hei = str(python_data.get(f'models[{i}][variants][{j}][height]') or height or '')[:50] or None
+                    v_wid = str(python_data.get(f'models[{i}][variants][{j}][width]') or width or '')[:50] or None
+                    v_wei = str(python_data.get(f'models[{i}][variants][{j}][weight]') or weight or '')[:50] or None
+                    v_clen = str(python_data.get(f'models[{i}][variants][{j}][carton_length]') or carton_length or '')[:50] or None
+                    v_cwid = str(python_data.get(f'models[{i}][variants][{j}][carton_width]') or carton_width or '')[:50] or None
+                    v_chei = str(python_data.get(f'models[{i}][variants][{j}][carton_height]') or carton_height or '')[:50] or None
+                    v_cwei = str(python_data.get(f'models[{i}][variants][{j}][carton_weight]') or carton_weight or '')[:50] or None
+
                     create_variant = models.ProductModelVariant.objects.create(
                         product_id = product_id,
                         model_id = create_model.id,
@@ -568,6 +577,14 @@ def product_model_variant_create(request):
                         name_french = variant_name_french,
                         image = variant_image,
                         price = variant_price,
+                        length = v_len,
+                        height = v_hei,
+                        width = v_wid,
+                        weight = v_wei,
+                        carton_length = v_clen,
+                        carton_width = v_cwid,
+                        carton_height = v_chei,
+                        carton_weight = v_cwei,
                         variant_verification = 'Approved',
                         status = 'Active'
 
@@ -1114,8 +1131,12 @@ def product_model_variant_update(request):
                                 update_variant = models.ProductModelVariant.objects.get(id = variant_id)
                                 update_variant.name = variant_name
                                 update_variant.name_french = variant_name_french
-                                
                                 update_variant.price = variant_price
+
+                                for dim_field in ['length', 'height', 'width', 'weight', 'carton_length', 'carton_width', 'carton_height', 'carton_weight']:
+                                    v_val = python_data.get(f'models[{i}][variants][{j}][{dim_field}]')
+                                    if v_val is not None:
+                                        setattr(update_variant, dim_field, str(v_val)[:50])
 
                                 if not isinstance(variant_image, str):
                                     # print("VARIANT IS HERE")
@@ -1138,17 +1159,31 @@ def product_model_variant_update(request):
                                         jpg_name = base_name + ".jpg"
                                         variant_image = ContentFile(buffer.read(), name=jpg_name)
 
+                                v_len = str(python_data.get(f'models[{i}][variants][{j}][length]') or length or '')[:50] or None
+                                v_hei = str(python_data.get(f'models[{i}][variants][{j}][height]') or height or '')[:50] or None
+                                v_wid = str(python_data.get(f'models[{i}][variants][{j}][width]') or width or '')[:50] or None
+                                v_wei = str(python_data.get(f'models[{i}][variants][{j}][weight]') or weight or '')[:50] or None
+                                v_clen = str(python_data.get(f'models[{i}][variants][{j}][carton_length]') or carton_length or '')[:50] or None
+                                v_cwid = str(python_data.get(f'models[{i}][variants][{j}][carton_width]') or carton_width or '')[:50] or None
+                                v_chei = str(python_data.get(f'models[{i}][variants][{j}][carton_height]') or carton_height or '')[:50] or None
+                                v_cwei = str(python_data.get(f'models[{i}][variants][{j}][carton_weight]') or carton_weight or '')[:50] or None
 
                                 create_variant = models.ProductModelVariant.objects.create(
                                     product_id = get_product.id,
                                     model_id = model_id,
                                     name = variant_name,
                                     name_french = variant_name_french,
-                                    
                                     image = variant_image,
                                     price = variant_price,
+                                    length = v_len,
+                                    height = v_hei,
+                                    width = v_wid,
+                                    weight = v_wei,
+                                    carton_length = v_clen,
+                                    carton_width = v_cwid,
+                                    carton_height = v_chei,
+                                    carton_weight = v_cwei,
                                     variant_verification = 'Approved'
-
                                 )
                                 create_variant.save()
                                 
@@ -2731,18 +2766,28 @@ def vendor_apply_product_price(request):
         vendor_price = python_data.get('vendor_price')
         name_french = python_data.get('variant_name_french')
 
+        get_model = models.ProductModel.objects.get(id = model_id)
+        product_obj = get_model.product
+        product_id = product_obj.id if product_obj else None
+
         create_variant = models.ProductModelVariant.objects.create(
+            product_id = product_id,
             model_id = model_id,
             name = name,
             name_french = name_french,
             image = image,
             price = price,
+            length = str(python_data.get('length') or (product_obj.length if product_obj else '') or '')[:50] or None,
+            height = str(python_data.get('height') or (product_obj.height if product_obj else '') or '')[:50] or None,
+            width = str(python_data.get('width') or (product_obj.width if product_obj else '') or '')[:50] or None,
+            weight = str(python_data.get('weight') or (product_obj.weight if product_obj else '') or '')[:50] or None,
+            carton_length = str(python_data.get('carton_length') or (product_obj.carton_length if product_obj else '') or '')[:50] or None,
+            carton_width = str(python_data.get('carton_width') or (product_obj.carton_width if product_obj else '') or '')[:50] or None,
+            carton_height = str(python_data.get('carton_height') or (product_obj.carton_height if product_obj else '') or '')[:50] or None,
+            carton_weight = str(python_data.get('carton_weight') or (product_obj.carton_weight if product_obj else '') or '')[:50] or None,
         )
         create_variant.save()
         variant_id = create_variant.id
-        
-        get_model = models.ProductModel.objects.get(id = model_id)
-        product_id = get_model.product.id
 
         create = models.VendorProductPrice.objects.create(
             product_id = product_id,
@@ -2785,12 +2830,22 @@ def vendor_apply_product_price(request):
 
         model_id = create_model.id
 
+        prod_obj = models.ProductDetail.objects.filter(id = product_id).first()
         create_variant = models.ProductModelVariant.objects.create(
+            product_id = product_id,
             model_id = model_id,
             name = variant_name,
             name_french = name_french,
             image = variant_image,
             price = variant_price,
+            length = str(python_data.get('length') or (prod_obj.length if prod_obj else '') or '')[:50] or None,
+            height = str(python_data.get('height') or (prod_obj.height if prod_obj else '') or '')[:50] or None,
+            width = str(python_data.get('width') or (prod_obj.width if prod_obj else '') or '')[:50] or None,
+            weight = str(python_data.get('weight') or (prod_obj.weight if prod_obj else '') or '')[:50] or None,
+            carton_length = str(python_data.get('carton_length') or (prod_obj.carton_length if prod_obj else '') or '')[:50] or None,
+            carton_width = str(python_data.get('carton_width') or (prod_obj.carton_width if prod_obj else '') or '')[:50] or None,
+            carton_height = str(python_data.get('carton_height') or (prod_obj.carton_height if prod_obj else '') or '')[:50] or None,
+            carton_weight = str(python_data.get('carton_weight') or (prod_obj.carton_weight if prod_obj else '') or '')[:50] or None,
         )
         create_variant.save()
         variant_id = create_variant.id
@@ -2861,18 +2916,28 @@ def vendor_product_price_create(request):
         vendor_price = python_data.get('vendor_price')
         name_french = python_data.get('variant_name_french')
 
+        get_model = models.ProductModel.objects.get(id = model_id)
+        product_obj = get_model.product
+        product_id = product_obj.id if product_obj else None
+
         create_variant = models.ProductModelVariant.objects.create(
+            product_id = product_id,
             model_id = model_id,
             name = name,
             name_french = name_french,
             image = image,
             price = price,
+            length = str(python_data.get('length') or (product_obj.length if product_obj else '') or '')[:50] or None,
+            height = str(python_data.get('height') or (product_obj.height if product_obj else '') or '')[:50] or None,
+            width = str(python_data.get('width') or (product_obj.width if product_obj else '') or '')[:50] or None,
+            weight = str(python_data.get('weight') or (product_obj.weight if product_obj else '') or '')[:50] or None,
+            carton_length = str(python_data.get('carton_length') or (product_obj.carton_length if product_obj else '') or '')[:50] or None,
+            carton_width = str(python_data.get('carton_width') or (product_obj.carton_width if product_obj else '') or '')[:50] or None,
+            carton_height = str(python_data.get('carton_height') or (product_obj.carton_height if product_obj else '') or '')[:50] or None,
+            carton_weight = str(python_data.get('carton_weight') or (product_obj.carton_weight if product_obj else '') or '')[:50] or None,
         )
         create_variant.save()
         variant_id = create_variant.id
-        
-        get_model = models.ProductModel.objects.get(id = model_id)
-        product_id = get_model.product.id
 
         create = models.VendorProductPrice.objects.create(
             product_id = product_id,
@@ -2915,12 +2980,22 @@ def vendor_product_price_create(request):
 
         model_id = create_model.id
 
+        prod_obj = models.ProductDetail.objects.filter(id = product_id).first()
         create_variant = models.ProductModelVariant.objects.create(
+            product_id = product_id,
             model_id = model_id,
             name = variant_name,
             name_french = name_french,
             image = variant_image,
             price = variant_price,
+            length = str(python_data.get('length') or (prod_obj.length if prod_obj else '') or '')[:50] or None,
+            height = str(python_data.get('height') or (prod_obj.height if prod_obj else '') or '')[:50] or None,
+            width = str(python_data.get('width') or (prod_obj.width if prod_obj else '') or '')[:50] or None,
+            weight = str(python_data.get('weight') or (prod_obj.weight if prod_obj else '') or '')[:50] or None,
+            carton_length = str(python_data.get('carton_length') or (prod_obj.carton_length if prod_obj else '') or '')[:50] or None,
+            carton_width = str(python_data.get('carton_width') or (prod_obj.carton_width if prod_obj else '') or '')[:50] or None,
+            carton_height = str(python_data.get('carton_height') or (prod_obj.carton_height if prod_obj else '') or '')[:50] or None,
+            carton_weight = str(python_data.get('carton_weight') or (prod_obj.carton_weight if prod_obj else '') or '')[:50] or None,
         )
         create_variant.save()
         variant_id = create_variant.id
@@ -5774,6 +5849,9 @@ def variant_update(request):
             get_variant.name = name
             get_variant.name_french = name_french
             get_variant.price = price
+            for dim_field in ['length', 'height', 'width', 'weight', 'carton_length', 'carton_width', 'carton_height', 'carton_weight']:
+                if python_data.get(dim_field) is not None:
+                    setattr(get_variant, dim_field, str(python_data.get(dim_field))[:50])
             if not isinstance(image, str) and image not in [None,'','null']:
                 get_variant.image = image
 

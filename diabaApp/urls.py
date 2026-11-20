@@ -35,8 +35,19 @@ from diabaApp.apis.banner_views import *
 from diabaApp.apis.container_views import *
 from diabaApp.apis.activity_views import *
 from diabaApp.apis.third_party_product_views import fetch_third_party_products, compare_product_flow, import_yuwi_go_products, sync_third_party_products
+from diabaApp.swagger import swagger_ui_html, redoc_ui_html, openapi_schema_json, openapi_schema_refresh
+from diabaApp.auth_helper import token_refresh_api
 
 urlpatterns = [
+    # Swagger & ReDoc OpenAPI Documentation
+    path('swagger/', swagger_ui_html, name='swagger-ui'),
+    path('docs/', swagger_ui_html, name='docs-ui'),
+    path('redoc/', redoc_ui_html, name='redoc-ui'),
+    path('swagger.json', openapi_schema_json, name='swagger-json'),
+    path('api/schema.json', openapi_schema_json, name='openapi-schema-json'),
+    path('api/schema/refresh/', openapi_schema_refresh, name='openapi-schema-refresh'),
+    path('api/token_refresh/', token_refresh_api, name='token_refresh'),
+
 
     path('api/app_dyanmic_setting_update/',app_dyanmic_setting_update, name='app_dyanmic_setting_update'), #done
     path('api/app_setting/',app_setting, name='app_setting'), #done
