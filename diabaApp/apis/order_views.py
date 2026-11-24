@@ -1155,7 +1155,19 @@ def inquiry_order_create(request):
 @csrf_exempt
 def all_order_list_admin(request):
     if request.method == 'POST':
-        python_data = JSONParser().parse(io.BytesIO(request.body))
+        try:
+            body_bytes = request.body
+            if body_bytes:
+                try:
+                    python_data = json.loads(body_bytes)
+                except Exception:
+                    import re
+                    cleaned = re.sub(r',\s*([\]}])', r'\1', body_bytes.decode('utf-8', errors='ignore'))
+                    python_data = json.loads(cleaned)
+            else:
+                python_data = {}
+        except Exception:
+            python_data = request.POST.dict() or {}
         
         order_status = python_data.get('order_status', 'completed')
         search_key = python_data.get('search_key', "").strip()
