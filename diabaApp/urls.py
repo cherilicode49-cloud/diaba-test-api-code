@@ -53,6 +53,14 @@ urlpatterns = [
     path('api/app_setting/',app_setting, name='app_setting'), #done
     path('api/admin_app_dynamic_setting/',admin_app_dynamic_setting, name='admin_app_dynamic_setting'), #done
 
+    # App Version Management & SemVer Force Update
+    path('api/v1/app/version-check/', app_version_check, name='app_version_check_v1'),
+    path('api/v1/app/version-check', app_version_check),
+    path('api/app_version_check/', app_version_check, name='app_version_check'),
+    path('api/v1/admin/app-versions/', admin_app_versions, name='admin_app_versions_v1'),
+    path('api/v1/admin/app-versions', admin_app_versions),
+    path('api/admin_app_versions/', admin_app_versions, name='admin_app_versions'),
+
     path('api/admin_login/',admin_login, name='admin_login'), #done
     
     ## Vendor Details
@@ -412,6 +420,12 @@ urlpatterns = [
     ## Delivery Days 
     path('api/all_delivery_days_list/',all_delivery_days_list, name='all_delivery_days_list'), #done
     path('api/delivery_days_update/',delivery_days_update, name='delivery_days_update'), #done
+    path('api/delivery_day_detail_list_admin/', delivery_day_detail_list_admin, name='delivery_day_detail_list_admin'),
+    path('api/delivery_day_detail_add_admin/', delivery_day_detail_add_admin, name='delivery_day_detail_add_admin'),
+    path('api/delivery_day_detail_update_admin/', delivery_day_detail_update_admin, name='delivery_day_detail_update_admin'),
+    path('api/delivery_day_detail_delete_admin/', delivery_day_detail_delete_admin, name='delivery_day_detail_delete_admin'),
+    path('api/delivery_day_available_countries_admin/', delivery_day_available_countries_admin, name='delivery_day_available_countries_admin'),
+    path('api/available_countries_for_delivery_day_admin/', delivery_day_available_countries_admin, name='available_countries_for_delivery_day_admin'),
     
 
     # path('api/price_exchange/',price_exchange, name='price_exchange'),

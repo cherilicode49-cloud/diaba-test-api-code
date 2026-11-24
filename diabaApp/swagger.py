@@ -53,6 +53,16 @@ TOKEN_REQUIRED_PATHS = {
     '/api/user_new_message_count/',
     '/api/review_create/',
     '/api/recently_view_product_list/',
+    # Delivery Days Configuration (Admin)
+    '/api/delivery_day_detail_list_admin/',
+    '/api/delivery_day_detail_add_admin/',
+    '/api/delivery_day_detail_update_admin/',
+    '/api/delivery_day_detail_delete_admin/',
+    '/api/delivery_days_update/',
+    # App Version Management (Admin)
+    '/api/v1/admin/app-versions/',
+    '/api/v1/admin/app-versions',
+    '/api/admin_app_versions/',
 }
 
 DUAL_MODE_PATHS = {
@@ -81,6 +91,9 @@ PUBLIC_PATHS = {
     '/api/product_review_list_admin/',
     '/api/get_shipping_cost/',
     '/api/all_product_country/',
+    '/api/all_delivery_days_list/',
+    '/api/delivery_day_available_countries_admin/',
+    '/api/available_countries_for_delivery_day_admin/',
     # Logistics & App Settings
     '/api/cargo_list_app/',
     '/api/banner_list_app/',
@@ -91,6 +104,9 @@ PUBLIC_PATHS = {
     '/api/money_network_list/',
     '/api/promocode_list/',
     '/api/app_setting/',
+    '/api/v1/app/version-check/',
+    '/api/v1/app/version-check',
+    '/api/app_version_check/',
     '/api/container_status_view/',
     '/api/about_us_list/',
     '/api/terms_and_condition_list/',
@@ -190,8 +206,27 @@ def guess_type_and_schema(pname):
     lower = pname.lower()
     if any(k in lower for k in ['image', 'file', 'photo', 'avatar', 'doc', 'pdf', 'excel', 'receipt']):
         return {'type': 'string', 'format': 'binary', 'description': f'File upload for {pname}'}
+    if any(k in lower for k in ['_delivery', 'delivery_day', 'delay_day']) or lower in ['express_delivery', 'air_delivery', 'ship_delivery', 'express_delivery_days', 'air_delivery_days', 'ship_delivery_days']:
+        example_val = 10 if 'express' in lower else (25 if 'air' in lower else (90 if 'ship' in lower else 7))
+        return {'type': 'integer', 'example': example_val, 'description': f'Number of delivery days ({pname})'}
+    if lower in ['country', 'country_id', 'country_name', 'countryname']:
+        return {'type': 'string', 'example': '1', 'description': 'Country identifier (Country ID or country name)'}
+    if lower in ['search', 'q', 'keyword']:
+        return {'type': 'string', 'example': 'Egypt', 'description': 'Search keyword for filtering'}
     if lower.endswith('_id') or lower in ['id', 'user_id', 'product_id', 'order_id', 'category_id', 'subcategory_id', 'vendor_id', 'page_number', 'row_data', 'count', 'quantity', 'total_employee', 'days']:
         return {'type': 'integer', 'example': 1, 'description': f'Identifier or count ({pname})'}
+    if lower in ['platform']:
+        return {'type': 'string', 'enum': ['android', 'ios'], 'example': 'android', 'description': 'Target mobile platform (android or ios)'}
+    if lower in ['app_version', 'latest_version', 'min_supported_version']:
+        return {'type': 'string', 'example': '1.0.0', 'description': f'Semantic version string ({pname})'}
+    if lower in ['store_url']:
+        return {'type': 'string', 'format': 'uri', 'example': 'https://play.google.com/store/apps/details?id=com.diaba.ecommerce', 'description': 'App store download URL'}
+    if lower in ['update_title']:
+        return {'type': 'string', 'example': 'New Version Available', 'description': 'Update dialog title'}
+    if lower in ['release_notes']:
+        return {'type': 'string', 'example': 'Bug fixes and performance enhancements.', 'description': 'Changelog / release notes'}
+    if lower in ['maintenance_message']:
+        return {'type': 'string', 'example': 'Scheduled maintenance in progress. Please check back shortly.', 'description': 'Downtime message'}
     if any(k in lower for k in ['price', 'amount', 'discount', 'weight', 'length', 'width', 'height', 'rate', 'commission']):
         return {'type': 'number', 'format': 'float', 'example': 10.50, 'description': f'Numeric amount ({pname})'}
     if any(k in lower for k in ['is_', 'has_']) or lower in ['status_bool', 'active', 'coupon_verify']:
@@ -263,6 +298,12 @@ class CodebaseInspector:
                             m = comp.value.upper()
                             if m in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']:
                                 methods.add(m)
+                        elif isinstance(comp, (ast.List, ast.Tuple)):
+                            for elt in comp.elts:
+                                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                    m = elt.value.upper()
+                                    if m in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']:
+                                        methods.add(m)
 
             if isinstance(sub, ast.Call):
                 if isinstance(sub.func, ast.Attribute) and sub.func.attr == 'get':
@@ -495,6 +536,127 @@ def build_openapi_spec(base_url=""):
                 }
             }
 
+            # Custom response schemas for Delivery Day Detail endpoints
+            if path == '/api/delivery_day_detail_list_admin/':
+                operation['responses']['200'] = {
+                    'description': 'List of configured delivery days per country',
+                    'content': {
+                        'application/json': {
+                            'schema': {
+                                'type': 'object',
+                                'properties': {
+                                    'data': {
+                                        'type': 'array',
+                                        'items': {'$ref': '#/components/schemas/DeliveryDayDetail'}
+                                    },
+                                    'total_count': {'type': 'integer', 'example': 1},
+                                    'message': {'type': 'string', 'example': 'Delivery day details fetched successfully.'}
+                                }
+                            }
+                        }
+                    }
+                }
+            elif path in ['/api/delivery_day_detail_add_admin/', '/api/delivery_day_detail_update_admin/', '/api/all_delivery_days_list/', '/api/delivery_days_update/']:
+                operation['responses']['200'] = {
+                    'description': 'Delivery day configuration record',
+                    'content': {
+                        'application/json': {
+                            'schema': {
+                                'type': 'object',
+                                'properties': {
+                                    'message': {'type': 'string', 'example': 'Delivery days updated successfully.'},
+                                    'data': {'$ref': '#/components/schemas/DeliveryDayDetail'}
+                                }
+                            }
+                        }
+                    }
+                }
+            elif path in ['/api/delivery_day_available_countries_admin/', '/api/available_countries_for_delivery_day_admin/']:
+                operation['responses']['200'] = {
+                    'description': 'List of available countries (excluding countries that already have a delivery day configuration)',
+                    'content': {
+                        'application/json': {
+                            'schema': {
+                                'type': 'object',
+                                'properties': {
+                                    'data': {
+                                        'type': 'array',
+                                        'items': {'$ref': '#/components/schemas/AvailableCountryForDelivery'}
+                                    },
+                                    'total_count': {'type': 'integer', 'example': 50},
+                                    'message': {'type': 'string', 'example': 'Available countries fetched successfully.'}
+                                }
+                            }
+                        }
+                    }
+                }
+            elif path == '/api/delivery_day_detail_delete_admin/':
+                operation['responses']['200'] = {
+                    'description': 'Deletion confirmation',
+                    'content': {
+                        'application/json': {
+                            'schema': {
+                                'type': 'object',
+                                'properties': {
+                                    'message': {'type': 'string', 'example': 'Delivery day detail deleted successfully.'}
+                                }
+                            }
+                        }
+                    }
+                }
+            elif path in ['/api/v1/app/version-check/', '/api/v1/app/version-check', '/api/app_version_check/']:
+                operation['responses']['200'] = {
+                    'description': 'SemVer version evaluation and update recommendations',
+                    'content': {
+                        'application/json': {
+                            'schema': {
+                                'type': 'object',
+                                'properties': {
+                                    'status': {'type': 'boolean', 'example': True},
+                                    'message': {'type': 'string', 'example': 'Version check retrieved successfully'},
+                                    'data': {'$ref': '#/components/schemas/AppVersionCheckData'}
+                                }
+                            }
+                        }
+                    }
+                }
+            elif path in ['/api/v1/admin/app-versions/', '/api/v1/admin/app-versions', '/api/admin_app_versions/']:
+                if method_key == 'get':
+                    operation['responses']['200'] = {
+                        'description': 'Current version settings for Android and iOS platforms',
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'status': {'type': 'boolean', 'example': True},
+                                        'message': {'type': 'string', 'example': 'App version settings fetched successfully'},
+                                        'data': {
+                                            'type': 'array',
+                                            'items': {'$ref': '#/components/schemas/AppVersionSetting'}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                else:
+                    operation['responses']['200'] = {
+                        'description': 'Updated version setting for the specified platform',
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'status': {'type': 'boolean', 'example': True},
+                                        'message': {'type': 'string', 'example': 'App version settings updated successfully'},
+                                        'data': {'$ref': '#/components/schemas/AppVersionSetting'}
+                                    }
+                                }
+                            }
+                        }
+                    }
+
             # Security requirement configuration
             if auth_tier == 'token_required':
                 operation['security'] = [{'BearerAuth': []}]
@@ -532,6 +694,27 @@ def build_openapi_spec(base_url=""):
                         all_body.append('promocodes')
                 if path == '/api/token_refresh/':
                     all_body = ['refresh_token']
+                if path == '/api/delivery_day_detail_add_admin/':
+                    all_body = ['country', 'express_delivery', 'air_delivery', 'ship_delivery']
+                if path in ['/api/delivery_day_detail_update_admin/', '/api/delivery_days_update/']:
+                    all_body = ['id', 'country', 'express_delivery', 'air_delivery', 'ship_delivery']
+                if path == '/api/delivery_day_detail_delete_admin/':
+                    all_body = ['id']
+                if path == '/api/delivery_day_detail_list_admin/':
+                    all_body = ['search', 'country']
+                if path == '/api/all_delivery_days_list/':
+                    all_body = ['country']
+                if path in ['/api/v1/app/version-check/', '/api/v1/app/version-check', '/api/app_version_check/']:
+                    all_body = ['platform', 'app_version']
+                if path in ['/api/v1/admin/app-versions/', '/api/v1/admin/app-versions', '/api/admin_app_versions/']:
+                    if method_key in ['post', 'put']:
+                        all_body = [
+                            'platform', 'latest_version', 'min_supported_version',
+                            'is_force_update', 'update_title', 'release_notes',
+                            'store_url', 'is_maintenance_mode', 'maintenance_message'
+                        ]
+                    else:
+                        all_body = []
 
                 if files or all_body:
                     properties = {}
@@ -600,6 +783,72 @@ def build_openapi_spec(base_url=""):
         'tags': sorted(list(tags_dict.values()), key=lambda t: t['name']),
         'paths': paths,
         'components': {
+            'schemas': {
+                'DeliveryDayDetail': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'integer', 'example': 1},
+                        'country': {'type': 'integer', 'example': 1, 'description': 'CountryWithCurrency ID'},
+                        'country_name': {'type': 'string', 'example': 'Egypt'},
+                        'country_calling_code': {'type': 'string', 'example': '+20'},
+                        'country_iso_alphaTwo_key': {'type': 'string', 'example': 'EG'},
+                        'currency_code': {'type': 'string', 'example': 'EGP'},
+                        'currency_symbol': {'type': 'string', 'example': 'E£'},
+                        'express_delivery': {'type': 'integer', 'example': 10, 'description': 'Express delivery duration in days'},
+                        'air_delivery': {'type': 'integer', 'example': 25, 'description': 'Air delivery duration in days'},
+                        'ship_delivery': {'type': 'integer', 'example': 90, 'description': 'Ship delivery duration in days'}
+                    }
+                },
+                'AvailableCountryForDelivery': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'integer', 'example': 1},
+                        'country_name': {'type': 'string', 'example': 'Senegal'},
+                        'country_calling_code': {'type': 'string', 'example': '+221'},
+                        'country_iso_alphaTwo_key': {'type': 'string', 'example': 'SN'},
+                        'currency_code': {'type': 'string', 'example': 'XOF'},
+                        'currency_symbol': {'type': 'string', 'example': 'CFA'},
+                        'price_by_air': {'type': 'string', 'example': '0.00'},
+                        'price_by_ship': {'type': 'string', 'example': '0.00'},
+                        'express_shipping': {'type': 'string', 'example': '0.00'},
+                        'status': {'type': 'string', 'example': 'Active'}
+                    }
+                },
+                'AppVersionCheckData': {
+                    'type': 'object',
+                    'properties': {
+                        'update_type': {
+                            'type': 'string',
+                            'enum': ['none', 'optional', 'force', 'maintenance'],
+                            'example': 'force',
+                            'description': 'Update urgency classification based on SemVer comparison'
+                        },
+                        'is_maintenance_mode': {'type': 'boolean', 'example': False},
+                        'maintenance_message': {'type': 'string', 'example': ''},
+                        'latest_version': {'type': 'string', 'example': '1.2.0'},
+                        'min_supported_version': {'type': 'string', 'example': '1.1.0'},
+                        'update_title': {'type': 'string', 'example': 'Update Available'},
+                        'release_notes': {'type': 'string', 'example': 'We fixed critical payment issues and improved app speed.'},
+                        'store_url': {'type': 'string', 'example': 'https://apps.apple.com/app/id6754025301'}
+                    }
+                },
+                'AppVersionSetting': {
+                    'type': 'object',
+                    'properties': {
+                        'id': {'type': 'integer', 'example': 1},
+                        'platform': {'type': 'string', 'enum': ['android', 'ios'], 'example': 'android'},
+                        'latest_version': {'type': 'string', 'example': '1.2.0'},
+                        'min_supported_version': {'type': 'string', 'example': '1.1.0'},
+                        'is_force_update': {'type': 'boolean', 'example': True},
+                        'update_title': {'type': 'string', 'example': 'Mandatory Update'},
+                        'release_notes': {'type': 'string', 'example': 'Please update to continue using the app.'},
+                        'store_url': {'type': 'string', 'example': 'https://play.google.com/store/apps/details?id=com.diaba.ecommerce'},
+                        'is_maintenance_mode': {'type': 'boolean', 'example': False},
+                        'maintenance_message': {'type': 'string', 'example': ''},
+                        'updated_at': {'type': 'string', 'format': 'date-time', 'example': '2026-11-24T15:00:00Z'}
+                    }
+                }
+            },
             'securitySchemes': {
                 'BearerAuth': {
                     'type': 'http',

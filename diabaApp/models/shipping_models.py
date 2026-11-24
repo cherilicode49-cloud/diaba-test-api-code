@@ -4,12 +4,13 @@ from datetime import datetime
 from .country_models import CountryWithCurrency
 
 class DeliveryDayDetail(models.Model):
+    country = models.ForeignKey(CountryWithCurrency, verbose_name='Country With Currency', null=True, blank=True, on_delete=models.CASCADE)
     express_delivery = models.IntegerField(verbose_name='express_delivery', null=True, blank=True)
-    air_delivery = models.IntegerField(verbose_name='express_delivery', null=True, blank=True)
-    ship_delivery = models.IntegerField(verbose_name='note_french', null=True, blank=True)
+    air_delivery = models.IntegerField(verbose_name='air_delivery', null=True, blank=True)
+    ship_delivery = models.IntegerField(verbose_name='ship_delivery', null=True, blank=True)
 
     def __str__(self):
-        return "%s" % self.id
+        return "%s" % str(self.id) + "--country with currency-->" + str(self.country)
 
 
 

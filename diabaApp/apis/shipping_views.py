@@ -30,7 +30,7 @@ from django.template.loader import get_template
 
 from django.core.mail import send_mail
 
-from diabaApp.serializer import DeliveryDayDetailSerializer
+from diabaApp.serializer import DeliveryDayDetailSerializer, AvailableCountryForDeliverySerializer
 
 
 
@@ -624,53 +624,306 @@ def get_shipping_cost(request):
 
 
 @csrf_exempt
-
 def delivery_days_update(request):
-
+    """
+    Update Delivery Days.
+    Updates shipping delivery days configuration by record ID or by country.
+    Accepts express_delivery, air_delivery, ship_delivery days and optional country.
+    """
     if request.method == "POST":
-
         python_data = JSONParser().parse(io.BytesIO(request.body))
-
         id = python_data.get('id')
+        country_val = python_data.get('country') or python_data.get('country_id')
 
-        update_data = models.DeliveryDayDetail.objects.get(id = id)
+        update_data = None
+        if id:
+            update_data = models.DeliveryDayDetail.objects.filter(id = id).first()
+        elif country_val:
+            if str(country_val).isdigit():
+                update_data = models.DeliveryDayDetail.objects.filter(country__id=int(country_val)).first()
+            if not update_data:
+                update_data = models.DeliveryDayDetail.objects.filter(country__country_name__iexact=str(country_val).strip()).first()
+
+        if not update_data:
+            res = {'message': 'Delivery day detail record not found.'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=404)
 
         update_data.express_delivery = python_data.get('express_delivery', update_data.express_delivery)
-
         update_data.air_delivery = python_data.get('air_delivery', update_data.air_delivery)
-
         update_data.ship_delivery = python_data.get('ship_delivery', update_data.ship_delivery)
-
+        if country_val:
+            if str(country_val).isdigit():
+                update_data.country_id = int(country_val)
+            else:
+                c_obj = models.CountryWithCurrency.objects.filter(country_name__iexact=str(country_val).strip()).first()
+                if c_obj:
+                    update_data.country = c_obj
         update_data.save()
 
-
-
         res = {
-
-            'message':'Delivery days updated Succesfully.'
-
+            'message':'Delivery days updated Succesfully.',
+            'data': DeliveryDayDetailSerializer(update_data).data
         }
-
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 200)
-
-
-
 
 
 @csrf_exempt
-
 def all_delivery_days_list(request):
-
+    """
+    Get Delivery Days (App / Public).
+    Returns delivery days configuration. If country is provided in body, returns country-specific delivery days; otherwise returns default delivery days.
+    """
     if request.method == "POST":
+        country = None
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+                country = python_data.get('country') or python_data.get('countryName') or python_data.get('country_id')
+            except Exception:
+                pass
 
-        delivery_data = models.DeliveryDayDetail.objects.first()
+        if country:
+            delivery_data = models.DeliveryDayDetail.objects.filter(
+                models.Q(country__id=country) if str(country).isdigit() else models.Q(country__country_name__iexact=country)
+            ).first()
+            if not delivery_data:
+                delivery_data = models.DeliveryDayDetail.objects.first()
+        else:
+            delivery_data = models.DeliveryDayDetail.objects.first()
 
-        serialser = DeliveryDayDetailSerializer(delivery_data).data
+        if delivery_data:
+            serialser = DeliveryDayDetailSerializer(delivery_data).data
+        else:
+            serialser = {
+                'express_delivery': 10,
+                'air_delivery': 25,
+                'ship_delivery': 90,
+                'country': None,
+                'country_name': None
+            }
 
         res = {
-
             'data':serialser
-
         }
-
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 200)
+
+
+@csrf_exempt
+def delivery_day_detail_list_admin(request):
+    """
+    List Delivery Day Details (Admin).
+    Returns list of all delivery day details per country with currency and shipping method timeframes.
+    Supports optional search or country filtering in query params or POST body.
+    """
+    if request.method in ["POST", "GET"]:
+        python_data = {}
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+            except Exception:
+                pass
+
+        search = python_data.get('search') or request.GET.get('search')
+        country = python_data.get('country') or python_data.get('country_id') or request.GET.get('country')
+
+        queryset = models.DeliveryDayDetail.objects.all().select_related('country').order_by('-id')
+
+        if search:
+            queryset = queryset.filter(
+                Q(country__country_name__icontains=search) |
+                Q(country__country_calling_code__icontains=search) |
+                Q(country__currency_code__icontains=search)
+            )
+
+        if country:
+            if str(country).isdigit():
+                queryset = queryset.filter(country__id=int(country))
+            else:
+                queryset = queryset.filter(country__country_name__iexact=str(country).strip())
+
+        serializer = DeliveryDayDetailSerializer(queryset, many=True).data
+        res = {
+            'data': serializer,
+            'total_count': queryset.count(),
+            'message': 'Delivery day details fetched successfully.'
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    res = {'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
+
+
+@csrf_exempt
+def delivery_day_detail_add_admin(request):
+    """
+    Add Delivery Day Detail (Admin).
+    Creates a new delivery day timeframe record for a country with express_delivery, air_delivery, and ship_delivery days.
+    """
+    if request.method == "POST":
+        python_data = JSONParser().parse(io.BytesIO(request.body)) if request.body else {}
+
+        country_val = python_data.get('country') or python_data.get('country_id') or python_data.get('countryName')
+        if not country_val:
+            res = {'message': 'Country is required.'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        c_obj = None
+        if str(country_val).isdigit():
+            c_obj = models.CountryWithCurrency.objects.filter(id=int(country_val)).first()
+        if not c_obj:
+            c_obj = models.CountryWithCurrency.objects.filter(
+                Q(country_name__iexact=str(country_val).strip()) |
+                Q(country_iso_alphaTwo_key__iexact=str(country_val).strip())
+            ).first()
+
+        if not c_obj:
+            res = {'message': f'Country "{country_val}" not found in CountryWithCurrency.'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        existing = models.DeliveryDayDetail.objects.filter(country=c_obj).first()
+        if existing:
+            res = {
+                'message': f'Delivery day detail already exists for {c_obj.country_name}.',
+                'data': DeliveryDayDetailSerializer(existing).data
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        express_delivery = python_data.get('express_delivery', 10)
+        air_delivery = python_data.get('air_delivery', 25)
+        ship_delivery = python_data.get('ship_delivery', 90)
+
+        new_detail = models.DeliveryDayDetail.objects.create(
+            country=c_obj,
+            express_delivery=express_delivery,
+            air_delivery=air_delivery,
+            ship_delivery=ship_delivery
+        )
+
+        serializer = DeliveryDayDetailSerializer(new_detail).data
+        res = {
+            'message': 'Delivery day detail added successfully.',
+            'data': serializer
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    res = {'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
+
+
+@csrf_exempt
+def delivery_day_detail_update_admin(request):
+    """
+    Update Delivery Day Detail (Admin).
+    Updates express_delivery, air_delivery, ship_delivery days or reassigns country for an existing record by id.
+    """
+    if request.method == "POST":
+        python_data = JSONParser().parse(io.BytesIO(request.body)) if request.body else {}
+
+        detail_id = python_data.get('id')
+        country_val = python_data.get('country') or python_data.get('country_id') or python_data.get('countryName')
+
+        detail_obj = None
+        if detail_id:
+            detail_obj = models.DeliveryDayDetail.objects.filter(id=detail_id).first()
+        elif country_val:
+            if str(country_val).isdigit():
+                detail_obj = models.DeliveryDayDetail.objects.filter(country__id=int(country_val)).first()
+            if not detail_obj:
+                detail_obj = models.DeliveryDayDetail.objects.filter(country__country_name__iexact=str(country_val).strip()).first()
+
+        if not detail_obj:
+            res = {'message': 'Delivery day detail record not found.'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=404)
+
+        if 'country' in python_data or 'country_id' in python_data:
+            c_val = python_data.get('country') or python_data.get('country_id')
+            if c_val:
+                c_obj = None
+                if str(c_val).isdigit():
+                    c_obj = models.CountryWithCurrency.objects.filter(id=int(c_val)).first()
+                if not c_obj:
+                    c_obj = models.CountryWithCurrency.objects.filter(country_name__iexact=str(c_val).strip()).first()
+                if c_obj:
+                    dup = models.DeliveryDayDetail.objects.filter(country=c_obj).exclude(id=detail_obj.id).first()
+                    if dup:
+                        res = {'message': f'Delivery day detail already exists for {c_obj.country_name}.'}
+                        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+                    detail_obj.country = c_obj
+
+        if 'express_delivery' in python_data:
+            detail_obj.express_delivery = python_data.get('express_delivery')
+
+        if 'air_delivery' in python_data:
+            detail_obj.air_delivery = python_data.get('air_delivery')
+
+        if 'ship_delivery' in python_data:
+            detail_obj.ship_delivery = python_data.get('ship_delivery')
+
+        detail_obj.save()
+
+        serializer = DeliveryDayDetailSerializer(detail_obj).data
+        res = {
+            'message': 'Delivery days updated successfully.',
+            'data': serializer
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    res = {'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
+
+
+@csrf_exempt
+def delivery_day_detail_delete_admin(request):
+    """
+    Delete Delivery Day Detail (Admin).
+    Permanently deletes a DeliveryDayDetail configuration record by ID.
+    """
+    if request.method == "POST":
+        python_data = JSONParser().parse(io.BytesIO(request.body)) if request.body else {}
+        detail_id = python_data.get('id')
+
+        if not detail_id:
+            res = {'message': 'id is required.'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        detail_obj = models.DeliveryDayDetail.objects.filter(id=detail_id).first()
+        if not detail_obj:
+            res = {'message': 'Delivery day detail record not found.'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=404)
+
+        detail_obj.delete()
+        res = {'message': 'Delivery day detail deleted successfully.'}
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    res = {'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
+
+
+@csrf_exempt
+def delivery_day_available_countries_admin(request):
+    """
+    Get Available Countries for Delivery Days (Admin).
+    Returns list of all country data from CountryWithCurrency that DO NOT yet have a DeliveryDayDetail record created.
+    No parameters required. Simply trigger this API (GET or POST) to get all unconfigured country records.
+    """
+    if request.method == "GET" or request.method == "POST":
+        # Get all country IDs already configured in DeliveryDayDetail
+        existing_country_ids = models.DeliveryDayDetail.objects.filter(
+            country__isnull=False
+        ).values_list('country_id', flat=True)
+
+        # Exclude configured countries from CountryWithCurrency
+        queryset = models.CountryWithCurrency.objects.exclude(
+            id__in=existing_country_ids
+        ).order_by('country_name')
+
+        serializer = AvailableCountryForDeliverySerializer(queryset, many=True).data
+        res = {
+            'data': serializer,
+            'total_count': queryset.count(),
+            'message': 'Available countries fetched successfully.'
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    res = {'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)

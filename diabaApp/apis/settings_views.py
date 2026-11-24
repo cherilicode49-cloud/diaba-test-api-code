@@ -16,7 +16,7 @@ from django.template.loader import get_template
 from django.core.mail import send_mail
 from diabaApp.serializer import AppDynamicSettingSerializer, ProductDataSerializer, RecentlyViewProductSerializer, CategoryDetailSerializer, \
     AboutUsSerializer, PrivacyPolicySerializer, RefundPolicySerializer, TermsAndConditionSerializer, ImportantNoteSerializer, \
-    IntroBannerSerializer
+    IntroBannerSerializer, AppVersionSettingSerializer
 from django.db.models.functions import Random
 from django.core.cache import cache
 
@@ -433,4 +433,189 @@ def intro_banner_data(request):
             'data':serialiser        
             }
         json_data = JSONRenderer().render(res)
-        return HttpResponse(json_data, content_type= 'application/json', status=200)  
+        return HttpResponse(json_data, content_type= 'application/json', status=200)
+
+
+def parse_semver(version_str):
+    """
+    Parses a version string into a comparable tuple/version object.
+    Supports versions like '1.2.0', 'v1.2.0', '1.2', etc.
+    """
+    if not version_str:
+        return (0, 0, 0)
+    cleaned = str(version_str).strip().lstrip('vV')
+    try:
+        from packaging import version
+        return version.parse(cleaned)
+    except Exception:
+        # Fallback numeric tuple comparison
+        base = cleaned.split('-')[0].split('+')[0]
+        parts = []
+        for p in base.split('.'):
+            digits = ''.join(c for c in p if c.isdigit())
+            parts.append(int(digits) if digits else 0)
+        while len(parts) < 3:
+            parts.append(0)
+        return tuple(parts[:3])
+
+
+@csrf_exempt
+def app_version_check(request):
+    """
+    App Version Check (Mobile App).
+    Compares the client's current app version against store releases using Semantic Versioning (SemVer).
+    Public endpoint requiring no authentication. Accepts GET query params or POST JSON body.
+    Returns update_type: 'none', 'optional', 'force', or 'maintenance'.
+    """
+    if request.method in ["GET", "POST"]:
+        python_data = {}
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+            except Exception:
+                pass
+
+        platform = python_data.get('platform') or request.GET.get('platform')
+        app_version = python_data.get('app_version') or request.GET.get('app_version')
+
+        if not platform:
+            res = {
+                'status': False,
+                'message': 'Platform is required (android or ios).',
+                'data': None
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        platform_clean = str(platform).strip().lower()
+        if platform_clean not in ['android', 'ios']:
+            res = {
+                'status': False,
+                'message': 'Invalid platform. Must be "android" or "ios".',
+                'data': None
+            }
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        setting = models.AppVersionSetting.objects.filter(platform=platform_clean).first()
+        if not setting:
+            # Fallback to default if record not yet saved
+            setting = models.AppVersionSetting.objects.create(
+                platform=platform_clean,
+                latest_version='1.0.0',
+                min_supported_version='1.0.0',
+                is_force_update=False,
+                update_title='New Version Available',
+                release_notes='Welcome to Diaba! Check out our latest updates.',
+                store_url='https://play.google.com/store/apps/details?id=com.diaba.ecommerce' if platform_clean == 'android' else 'https://apps.apple.com/app/id6754025301'
+            )
+
+        app_ver = app_version or '0.0.0'
+        app_ver_parsed = parse_semver(app_ver)
+        min_ver_parsed = parse_semver(setting.min_supported_version)
+        latest_ver_parsed = parse_semver(setting.latest_version)
+
+        # SemVer Hierarchy:
+        # 1. Maintenance Mode
+        if setting.is_maintenance_mode:
+            update_type = "maintenance"
+        # 2. Force Update (app_version < min_supported_version OR is_force_update and app_version < latest_version)
+        elif app_ver_parsed < min_ver_parsed:
+            update_type = "force"
+        elif setting.is_force_update and (app_ver_parsed < latest_ver_parsed):
+            update_type = "force"
+        # 3. Optional Update
+        elif app_ver_parsed < latest_ver_parsed:
+            update_type = "optional"
+        # 4. Up to date
+        else:
+            update_type = "none"
+
+        res = {
+            'status': True,
+            'message': 'Version check retrieved successfully',
+            'data': {
+                'update_type': update_type,
+                'is_maintenance_mode': setting.is_maintenance_mode,
+                'maintenance_message': setting.maintenance_message or '',
+                'latest_version': setting.latest_version,
+                'min_supported_version': setting.min_supported_version,
+                'update_title': setting.update_title or 'Update Available',
+                'release_notes': setting.release_notes or '',
+                'store_url': setting.store_url or ''
+            }
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    res = {'status': False, 'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
+
+
+@csrf_exempt
+def admin_app_versions(request):
+    """
+    App Version Settings Management (Admin).
+    GET: Returns current version configurations for all platforms (Android & iOS).
+    POST / PUT: Updates or creates version configuration for a specific platform.
+    Requires Admin Authentication Token.
+    """
+    if request.method == "GET":
+        settings_qs = models.AppVersionSetting.objects.all().order_by('platform')
+        serializer = AppVersionSettingSerializer(settings_qs, many=True).data
+        res = {
+            'status': True,
+            'message': 'App version settings fetched successfully',
+            'data': serializer
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    if request.method in ["POST", "PUT"]:
+        python_data = {}
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+            except Exception:
+                pass
+
+        platform = python_data.get('platform')
+        if not platform:
+            res = {'status': False, 'message': 'Platform is required (android or ios).'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        platform_clean = str(platform).strip().lower()
+        if platform_clean not in ['android', 'ios']:
+            res = {'status': False, 'message': 'Invalid platform. Must be "android" or "ios".'}
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
+
+        defaults = {}
+        if 'latest_version' in python_data:
+            defaults['latest_version'] = str(python_data.get('latest_version')).strip()
+        if 'min_supported_version' in python_data:
+            defaults['min_supported_version'] = str(python_data.get('min_supported_version')).strip()
+        if 'is_force_update' in python_data:
+            defaults['is_force_update'] = bool(python_data.get('is_force_update'))
+        if 'update_title' in python_data:
+            defaults['update_title'] = str(python_data.get('update_title')).strip()
+        if 'release_notes' in python_data:
+            defaults['release_notes'] = python_data.get('release_notes')
+        if 'store_url' in python_data:
+            defaults['store_url'] = str(python_data.get('store_url')).strip()
+        if 'is_maintenance_mode' in python_data:
+            defaults['is_maintenance_mode'] = bool(python_data.get('is_maintenance_mode'))
+        if 'maintenance_message' in python_data:
+            defaults['maintenance_message'] = python_data.get('maintenance_message')
+
+        setting_obj, created = models.AppVersionSetting.objects.update_or_create(
+            platform=platform_clean,
+            defaults=defaults
+        )
+
+        serializer = AppVersionSettingSerializer(setting_obj).data
+        res = {
+            'status': True,
+            'message': 'App version settings updated successfully',
+            'data': serializer
+        }
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+    res = {'status': False, 'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
+  

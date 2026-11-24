@@ -1376,26 +1376,120 @@ def product_detail_app(request):
     if request.method == 'POST':
         python_data = JSONParser().parse(io.BytesIO(request.body))
         id = python_data.get('id')
-        customer = python_data.get('customer')
+        customer = python_data.get('customer') or python_data.get('user_id')
 
         currencyCode = python_data.get('currencyCode', None)
         country = python_data.get('countryName', 'Egypt')
         ip_address = python_data.get('ip_address')
-
-        get_delivery_data = cache.get_or_set(
-            'delivery_day_detail_first',
-            lambda: models.DeliveryDayDetail.objects.first(),
-            600
-        )
-
-        now = datetime.now()
-        date_time = now.strftime('%Y-%m-%d, %H:%M:%S')
-
+        print(python_data, 'python_data')
         product = models.ProductDetail.objects.filter(id=id).select_related('subcategory', 'category').first()
         if not product:
             res = {'message': 'Product not found'}
             return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=404)
 
+        # Resolve country for currency and prices using currencyCode
+        try:
+            if currencyCode not in [None, '', 'null']:
+                c_obj = models.CountryWithCurrency.objects.filter(currency_code=currencyCode).first()
+                if c_obj:
+                    country = c_obj.country_name
+            elif country in [None, '', 'null']:
+                if ip_address:
+                    cached_ip = cache.get(f"ip_country_{ip_address}")
+                    if cached_ip:
+                        country = cached_ip
+                    else:
+                        try:
+                            resp = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=1.5).json()
+                            country = resp.get("country_name") or "Egypt"
+                            cache.set(f"ip_country_{ip_address}", country, 86400)
+                        except Exception:
+                            country = "Egypt"
+                else:
+                    country = "Egypt"
+        except Exception:
+            country = country or 'Egypt'
+
+        # Check if user is found, then check country and find record in DeliveryDayDetail table, else add default data
+        user = None
+        if customer:
+            user = models.CustomerDetail.objects.filter(id=customer).first()
+
+        get_delivery_data = None
+        user_c_obj = None
+        user_delivery_country = None
+
+        if user:
+            if user.country and str(user.country).strip() not in ['None', '', 'null']:
+                user_delivery_country = str(user.country).strip()
+                user_c_obj = models.CountryWithCurrency.objects.filter(
+                    Q(country_name__iexact=user_delivery_country) |
+                    Q(country_iso_alphaTwo_key__iexact=user_delivery_country)
+                ).first()
+
+            if not user_c_obj and user.countryCode and str(user.countryCode).strip() not in ['None', '', 'null']:
+                code = str(user.countryCode).strip()
+                code_with_plus = code if code.startswith('+') else f"+{code}"
+                user_c_obj = models.CountryWithCurrency.objects.filter(
+                    Q(country_calling_code=code) | Q(country_calling_code=code_with_plus)
+                ).first()
+                if user_c_obj and not user_delivery_country:
+                    user_delivery_country = user_c_obj.country_name
+
+            delivery_country = user_delivery_country or country
+
+            # Find the record from DeliveryDayDetail table
+            if user_c_obj:
+                get_delivery_data = models.DeliveryDayDetail.objects.filter(country=user_c_obj).first()
+            if not get_delivery_data and user_delivery_country:
+                get_delivery_data = models.DeliveryDayDetail.objects.filter(
+                    Q(country__country_name__iexact=user_delivery_country) |
+                    Q(country__country_iso_alphaTwo_key__iexact=user_delivery_country)
+                ).first()
+            if not get_delivery_data and user.countryCode:
+                code = str(user.countryCode).strip()
+                get_delivery_data = models.DeliveryDayDetail.objects.filter(
+                    Q(country__country_calling_code=code) | Q(country__country_calling_code=f"+{code}")
+                ).first()
+
+            # If not found, add default data to DeliveryDayDetail
+            if not get_delivery_data and user_c_obj:
+                try:
+                    get_delivery_data, _ = models.DeliveryDayDetail.objects.get_or_create(
+                        country=user_c_obj,
+                        defaults={
+                            'express_delivery': 10,
+                            'air_delivery': 25,
+                            'ship_delivery': 90
+                        }
+                    )
+                except Exception:
+                    get_delivery_data = None
+
+            if get_delivery_data:
+                express_delivery_days = get_delivery_data.express_delivery if get_delivery_data.express_delivery is not None else 10
+                air_delivery_days = get_delivery_data.air_delivery if get_delivery_data.air_delivery is not None else 25
+                ship_delivery_days = get_delivery_data.ship_delivery if get_delivery_data.ship_delivery is not None else 90
+            else:
+                express_delivery_days = 10
+                air_delivery_days = 25
+                ship_delivery_days = 90
+        else:
+            delivery_country = country
+            # User is not found: try finding DeliveryDayDetail for delivery_country or take default data
+            get_delivery_data = models.DeliveryDayDetail.objects.filter(
+                Q(country__country_name__iexact=delivery_country) |
+                Q(country__country_name__iexact=country)
+            ).first()
+            if get_delivery_data:
+                express_delivery_days = get_delivery_data.express_delivery if get_delivery_data.express_delivery is not None else 10
+                air_delivery_days = get_delivery_data.air_delivery if get_delivery_data.air_delivery is not None else 25
+                ship_delivery_days = get_delivery_data.ship_delivery if get_delivery_data.ship_delivery is not None else 90
+            else:
+                express_delivery_days = 10
+                air_delivery_days = 25
+                ship_delivery_days = 90
+        
         delay_days_air = 0
         delay_days_ship = 0
         delay_days_express = 0
@@ -1406,10 +1500,8 @@ def product_detail_app(request):
         if product.delay_days_express not in [None, '', 'null']:
             delay_days_express = product.delay_days_express
 
-        express_delivery_days = get_delivery_data.express_delivery if get_delivery_data else 0
-        air_delivery_days = get_delivery_data.air_delivery if get_delivery_data else 0
-        ship_delivery_days = get_delivery_data.ship_delivery if get_delivery_data else 0
-
+        now = datetime.now()
+        date_time = now.strftime('%Y-%m-%d, %H:%M:%S')
         express_date_now = now + timedelta(days=express_delivery_days + delay_days_express)
         express_date = express_date_now.strftime('%d').lower()
         express_month = express_date_now.strftime('%B').lower()
@@ -1447,65 +1539,6 @@ def product_detail_app(request):
         ship_en = f"before {ship_date} {ship_month}"
         ship_fr = f"avant le {ship_date} {ship_fr_month}"
 
-        # Resolve country and delivery_country
-        try:
-            if currencyCode not in [None, '', 'null']:
-                c_obj = models.CountryWithCurrency.objects.filter(currency_code=currencyCode).first()
-                if c_obj:
-                    country = c_obj.country_name
-                if customer:
-                    user = models.CustomerDetail.objects.filter(id=customer).first()
-                    delivery_country = user.country if user and user.country else country
-                else:
-                    delivery_country = country
-            elif customer:
-                user = models.CustomerDetail.objects.filter(id=customer).first()
-                if user and user.countryCode:
-                    countryCode = user.countryCode
-                    c_obj = models.CountryWithCurrency.objects.filter(country_calling_code=countryCode).first()
-                    if c_obj:
-                        country = c_obj.country_name
-                        delivery_country = country
-                    else:
-                        if country in [None, '', 'null']:
-                            if ip_address:
-                                cached_ip = cache.get(f"ip_country_{ip_address}")
-                                if cached_ip:
-                                    country = cached_ip
-                                else:
-                                    try:
-                                        resp = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=1.5).json()
-                                        country = resp.get("country_name") or "Egypt"
-                                        cache.set(f"ip_country_{ip_address}", country, 86400)
-                                    except Exception:
-                                        country = "Egypt"
-                            else:
-                                country = "Egypt"
-                        delivery_country = country
-                else:
-                    delivery_country = country or "Egypt"
-            else:
-                if country in [None, '', 'null']:
-                    if ip_address:
-                        cached_ip = cache.get(f"ip_country_{ip_address}")
-                        if cached_ip:
-                            country = cached_ip
-                        else:
-                            try:
-                                resp = requests.get(f'https://ipapi.co/{ip_address}/json/', timeout=1.5).json()
-                                country = resp.get("country_name") or "Egypt"
-                                cache.set(f"ip_country_{ip_address}", country, 86400)
-                            except Exception:
-                                country = "Egypt"
-                    else:
-                        country = "Egypt"
-                    delivery_country = country
-                else:
-                    delivery_country = country
-        except Exception:
-            country = 'Egypt'
-            delivery_country = country
-
         # Review data and aggregates
         reviews_qs = models.ProductReview.objects.filter(product=id)
         review_serialiser = ProductReviewSerializer(reviews_qs.order_by('-id')[:5], many=True).data
@@ -1537,7 +1570,13 @@ def product_detail_app(request):
 
         get_other_specification = models.ProductOtherSpecification.objects.filter(product=id)
         other_serializer = ProductOtherSpecificationSerializer(get_other_specification, many=True).data
-        data.update({'image': image_serializer, 'other_data': other_serializer})
+        data.update({
+            'image': image_serializer,
+            'other_data': other_serializer,
+            'express_delivery_days': express_delivery_days,
+            'air_delivery_days': air_delivery_days,
+            'ship_delivery_days': ship_delivery_days,
+        })
 
         # Batch load models and variants in 2 single queries
         all_models = list(models.ProductModel.objects.filter(product=id).order_by('-id'))
@@ -1614,6 +1653,17 @@ def product_detail_app(request):
             'air_fr': air_fr,
             'ship_en': ship_en,
             'ship_fr': ship_fr,
+            'express_delivery': express_delivery_days,
+            'air_delivery': air_delivery_days,
+            'ship_delivery': ship_delivery_days,
+            'express_delivery_days': express_delivery_days,
+            'air_delivery_days': air_delivery_days,
+            'ship_delivery_days': ship_delivery_days,
+            'delivery_days': {
+                'express': express_delivery_days,
+                'air': air_delivery_days,
+                'ship': ship_delivery_days
+            },
             'total_review': total_review,
             'average_review': average_review,
             'review_data': review_serialiser,
@@ -4416,7 +4466,7 @@ def product_remove_add_to_cart(request):
 #         # flag = python_data.get('flag')
 #         link = python_data.get('link')
 
-#         now = datetime.now()
+        now = datetime.now()
 #         current_time = now.strftime("%Y-%m-%d, %H:%M:%S")
         
 #         letters = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z',\

@@ -57,3 +57,30 @@ class ImportantNote(models.Model):
  
     def __str__(self):
         return "%s" % self.id
+
+
+class AppVersionSetting(models.Model):
+    PLATFORM_CHOICES = (
+        ('android', 'Android'),
+        ('ios', 'iOS'),
+    )
+
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES, unique=True, verbose_name='Target Platform')
+    latest_version = models.CharField(max_length=20, default='1.0.0', verbose_name='Latest Version')
+    min_supported_version = models.CharField(max_length=20, default='1.0.0', verbose_name='Minimum Supported Version')
+    is_force_update = models.BooleanField(default=False, verbose_name='Is Force Update')
+    update_title = models.CharField(max_length=150, default='New Version Available', verbose_name='Update Title')
+    release_notes = models.TextField(null=True, blank=True, verbose_name='Release Notes')
+    store_url = models.CharField(max_length=255, default='', verbose_name='Store URL')
+    is_maintenance_mode = models.BooleanField(default=False, verbose_name='Is Maintenance Mode')
+    maintenance_message = models.TextField(null=True, blank=True, verbose_name='Maintenance Message')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated At')
+    created_at = models.DateTimeField(auto_now_add=True, null=True, blank=True, verbose_name='Created At')
+
+    class Meta:
+        verbose_name = 'App Version Setting'
+        verbose_name_plural = 'App Version Settings'
+        db_table = 'diabaApp_appversionsetting'
+
+    def __str__(self):
+        return f"{self.platform} - {self.latest_version}"

@@ -2314,8 +2314,20 @@ class DummyTagProductNameFrenchSerializer(serializers.ModelSerializer):
 
 
 class DeliveryDayDetailSerializer(serializers.ModelSerializer):
+    country_name = serializers.ReadOnlyField(source='country.country_name')
+    country_calling_code = serializers.ReadOnlyField(source='country.country_calling_code')
+    country_iso_alphaTwo_key = serializers.ReadOnlyField(source='country.country_iso_alphaTwo_key')
+    currency_code = serializers.ReadOnlyField(source='country.currency_code')
+    currency_symbol = serializers.ReadOnlyField(source='country.currency_symbol')
+
     class Meta:
         model = models.DeliveryDayDetail
+        fields = '__all__'
+
+
+class AvailableCountryForDeliverySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.CountryWithCurrency
         fields = '__all__'
 
 #  Vendor Payment Tracker Serializer
@@ -2452,4 +2464,22 @@ class UserActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = models.UserActivity
         fields = '__all__'
+
+
+class AppVersionSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.AppVersionSetting
+        fields = '__all__'
+
+
+class AppVersionCheckResponseSerializer(serializers.Serializer):
+    update_type = serializers.CharField(help_text="One of: 'none', 'optional', 'force', 'maintenance'")
+    is_maintenance_mode = serializers.BooleanField()
+    maintenance_message = serializers.CharField(allow_blank=True, allow_null=True)
+    latest_version = serializers.CharField()
+    min_supported_version = serializers.CharField()
+    update_title = serializers.CharField()
+    release_notes = serializers.CharField(allow_blank=True, allow_null=True)
+    store_url = serializers.CharField()
+
 
