@@ -2236,7 +2236,7 @@ def _import_single_yuwi_go_product(
     return product
 
 
-def _fetch_yiwugo_live_page(access_token=None, page=1, page_size=20, search_query="", is_oauth_token=False):
+def _fetch_yiwugo_live_page(access_token=None, page=1, page_size=20, search_query="", is_oauth_token=False, extra_params=None):
     """Fetch a single product list page from open.yiwugo.com (auto-refreshing OAuth token on 501)."""
     if not access_token:
         access_token, is_oauth_token = _get_yiwugo_access_token()
@@ -2247,6 +2247,8 @@ def _fetch_yiwugo_live_page(access_token=None, page=1, page_size=20, search_quer
         live_params = {"access_token": access_token, "cpage": page, "pageSize": page_size}
         if search_query:
             live_params["q"] = search_query
+        if extra_params and isinstance(extra_params, dict):
+            live_params.update(extra_params)
         resp = requests.get(
             "https://open.yiwugo.com/open/cn_product/list",
             params=live_params,
@@ -2668,6 +2670,58 @@ def _process_yuwi_go_items(
     return created_products, skipped_products, failed_products
 
 
+YIWUGO_MARKET_PARTITIONS = [
+    # District 1 (m=1001) - Toys, Flowers, Jewelry, Crafts
+    {"name": "District 1 Floor 1 (Artificial Flowers, Toys)", "extra": {"m": "1001", "f": "1"}},
+    {"name": "District 1 Floor 2 (Jewelry, Ornaments)", "extra": {"m": "1001", "f": "2"}},
+    {"name": "District 1 Floor 3 (Festive Arts, Crafts, Porcelain)", "extra": {"m": "1001", "f": "3"}},
+    {"name": "District 1 Floor 4 (Taiwan Mall, Crystals, Ceramics)", "extra": {"m": "1001", "f": "4"}},
+
+    # District 2 (m=1002) - Luggage, Hardware, Electronics, Clocks
+    {"name": "District 2 Floor 1 (Luggage, Bags, Rainwear)", "extra": {"m": "1002", "f": "1"}},
+    {"name": "District 2 Floor 2 (Hardware, Tools, Locks)", "extra": {"m": "1002", "f": "2"}},
+    {"name": "District 2 Floor 3 (Kitchenware, Clocks, Small Appliances)", "extra": {"m": "1002", "f": "3"}},
+    {"name": "District 2 Floor 4 (Electronics, Telecommunications)", "extra": {"m": "1002", "f": "4"}},
+    {"name": "District 2 Floor 5 (Export Featured Products)", "extra": {"m": "1002", "f": "5"}},
+
+    # District 3 (m=1003) - Stationery, Eyewear, Sports, Beauty
+    {"name": "District 3 Floor 1 (Pens, Paper, Office Supplies)", "extra": {"m": "1003", "f": "1"}},
+    {"name": "District 3 Floor 2 (Sporting Goods, Stationery)", "extra": {"m": "1003", "f": "2"}},
+    {"name": "District 3 Floor 3 (Eyewear, Cosmetics, Beauty)", "extra": {"m": "1003", "f": "3"}},
+    {"name": "District 3 Floor 4 (Buttons, Zippers, Garment Accessories)", "extra": {"m": "1003", "f": "4"}},
+
+    # District 4 (m=1004) - Hosiery, Daily Necessities, Footwear, Gloves
+    {"name": "District 4 Floor 1 (Hosiery, Socks)", "extra": {"m": "1004", "f": "1"}},
+    {"name": "District 4 Floor 2 (Daily Necessities, Gloves, Hats)", "extra": {"m": "1004", "f": "2"}},
+    {"name": "District 4 Floor 3 (Footwear, Belts, Ties, Towels)", "extra": {"m": "1004", "f": "3"}},
+    {"name": "District 4 Floor 4 (Scarves, Belts, Underwear)", "extra": {"m": "1004", "f": "4"}},
+    {"name": "District 4 Floor 5 (Garments, Tourism Goods)", "extra": {"m": "1004", "f": "5"}},
+
+    # District 5 (m=1005) - Imported Goods, Bedding, Textiles, Auto
+    {"name": "District 5 Floor 1 (Imported Commodities, Food)", "extra": {"m": "1005", "f": "1"}},
+    {"name": "District 5 Floor 2 (Bedding, Home Textiles)", "extra": {"m": "1005", "f": "2"}},
+    {"name": "District 5 Floor 3 (Textiles, Knitting Materials)", "extra": {"m": "1005", "f": "3"}},
+    {"name": "District 5 Floor 4 (Auto & Motorcycle Accessories)", "extra": {"m": "1005", "f": "4"}},
+
+    # Industrial Belt (m=1013)
+    {"name": "Industry Belt 1013 (Direct Manufacturers)", "extra": {"m": "1013"}},
+
+    # Core Wholesale Categories for Wide Catalog Coverage
+    {"name": "Hot Selling Products (goodLabelFlag=1)", "extra": {"goodLabelFlag": "1"}},
+    {"name": "Export Special Products (productLable=2)", "extra": {"productLable": "2"}},
+    {"name": "Category Bags (箱包)", "q": "箱包"},
+    {"name": "Category Clothing (服装)", "q": "服装"},
+    {"name": "Category Shoes (鞋子)", "q": "鞋子"},
+    {"name": "Category Toys (玩具)", "q": "玩具"},
+    {"name": "Category Jewelry (饰品)", "q": "饰品"},
+    {"name": "Category Electronics (电子)", "q": "电子"},
+    {"name": "Category Home & Living (家居)", "q": "家居"},
+    {"name": "Category Beauty & Cosmetics (美妆)", "q": "美妆"},
+    {"name": "Category Kitchen & Dining (厨房)", "q": "厨房"},
+    {"name": "Category Hardware & Tools (五金)", "q": "五金"},
+]
+
+
 def _run_yuwi_go_full_job(
     job_id,
     cny_rate=7.0,
@@ -2682,9 +2736,11 @@ def _run_yuwi_go_full_job(
     search_query="",
 ):
     """
-    Fully self-contained background worker for no-param import.
-    Does token auth + all page fetches entirely in background.
-    View returns 202 immediately after spawning this thread.
+    Automated Multi-Partition background worker.
+    - If search_query is supplied: crawls that query up to 100 pages.
+    - If search_query is empty (default full import): automatically iterates across
+      all 24+ Yiwugo Market & Floor physical partitions, crawling up to 100 pages per partition
+      and automatically bypassing Yiwugo's 100-page single-query limit.
     """
     try:
         # Step 1: get token in background
@@ -2699,68 +2755,80 @@ def _run_yuwi_go_full_job(
                 YUWI_GO_IMPORT_JOBS[job_id]["last_error"] = "Could not obtain Yiwugo access token"
             return
 
-        # Step 2: fetch first page to get total_pages
         with YUWI_GO_JOBS_LOCK:
             YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "running"
 
-        first_page_data = _fetch_yiwugo_live_page(
-            access_token=access_token,
-            page=start_page,
-            page_size=page_size,
-            search_query=search_query,
-            is_oauth_token=is_oauth_token,
-        )
-        total_found = first_page_data.get("numfound") or len(first_page_data.get("prslist") or [])
-        if isinstance(total_found, str):
-            total_found = int(total_found) if total_found.isdigit() else 0
-        elif not isinstance(total_found, int):
-            total_found = 0
-        total_pages = max(1, math.ceil(total_found / page_size)) if total_found else 1
-        end_page = total_pages
+        # Determine partition execution plan
+        if search_query:
+            partitions = [{"name": f"Search: {search_query}", "q": search_query}]
+        else:
+            partitions = YIWUGO_MARKET_PARTITIONS
 
         with YUWI_GO_JOBS_LOCK:
             j = YUWI_GO_IMPORT_JOBS[job_id]
-            j["end_page"] = end_page
-            j["total_pages_available"] = total_pages
-            j["total_products_available"] = total_found
+            j["partitions_total"] = len(partitions)
+            j["partitions_completed"] = 0
+            j["current_partition"] = partitions[0]["name"]
+            j["total_pages_available"] = len(partitions) * 100
+            j["end_page"] = 100
 
-        # Step 3: iterate all pages
-        for current_page in range(start_page, end_page + 1):
-            close_old_connections()
-            active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
-            if current_page == start_page:
-                page_data = first_page_data
-            else:
+        print(
+            f"[Yiwugo Job {job_id}] Initialized Automated Multi-Partition Crawl across {len(partitions)} partitions.",
+            flush=True,
+        )
+
+        # Step 2: Iterate through each partition
+        for part_idx, part in enumerate(partitions, start=1):
+            part_name = part["name"]
+            part_query = part.get("q", "")
+            part_extra = part.get("extra") or {}
+
+            with YUWI_GO_JOBS_LOCK:
+                j = YUWI_GO_IMPORT_JOBS.get(job_id)
+                if j:
+                    j["current_partition"] = part_name
+                    j["partition_index"] = part_idx
+
+            print(
+                f"\n[Yiwugo Job {job_id}] >>> Starting Partition {part_idx}/{len(partitions)}: {part_name} <<<",
+                flush=True,
+            )
+
+            # Each partition supports up to 100 pages in Yiwugo
+            max_partition_pages = 100
+            for current_page in range(start_page if part_idx == 1 else 1, max_partition_pages + 1):
+                close_old_connections()
+                active_token = (cache.get(YIWUGO_TOKEN_CACHE_KEY) or access_token) if is_oauth_token else access_token
+
+                page_data = {}
                 for retry in range(3):
                     try:
                         page_data = _fetch_yiwugo_live_page(
                             access_token=active_token,
                             page=current_page,
                             page_size=page_size,
-                            search_query=search_query,
+                            search_query=part_query,
                             is_oauth_token=is_oauth_token,
+                            extra_params=part_extra,
                         )
                         break
                     except Exception as p_err:
                         if retry == 2:
                             with YUWI_GO_JOBS_LOCK:
-                                YUWI_GO_IMPORT_JOBS[job_id]["last_error"] = f"Page {current_page} failed: {p_err}"
+                                YUWI_GO_IMPORT_JOBS[job_id]["last_error"] = f"[{part_name}] Page {current_page} failed: {p_err}"
                             page_data = {}
                         else:
                             time.sleep(1.5)
 
-            page_items = list((page_data or {}).get("prslist") or [])
-            if not page_items:
-                if page_data == {}:
-                    with YUWI_GO_JOBS_LOCK:
-                        j = YUWI_GO_IMPORT_JOBS.get(job_id)
-                        if j:
-                            j["current_page"] = current_page
-                            j["pages_processed"] += 1
-                    continue
-                if current_page > start_page:
+                page_items = list((page_data or {}).get("prslist") or [])
+                if not page_items:
+                    # When page is empty, this partition reached its end (e.g. at page 20, 50, or 100)
+                    print(
+                        f"[Yiwugo Job {job_id}] Partition {part_idx}/{len(partitions)} ({part_name}) completed at page {current_page - 1}. Moving to next partition...",
+                        flush=True,
+                    )
                     break
-            else:
+
                 created, skipped, failed = _process_yuwi_go_items(
                     raw_items=page_items,
                     access_token=active_token,
@@ -2774,6 +2842,7 @@ def _run_yuwi_go_full_job(
                     download_images=False,
                     fetch_detail=fetch_detail,
                 )
+
                 with YUWI_GO_JOBS_LOCK:
                     j = YUWI_GO_IMPORT_JOBS[job_id]
                     j["current_page"] = current_page
@@ -2782,29 +2851,38 @@ def _run_yuwi_go_full_job(
                     j["created_count"] += len(created)
                     j["skipped_count"] += len(skipped)
                     j["failed_count"] += len(failed)
-                    print(
-                        f"[Yiwugo Job {job_id}] Page {current_page}/{end_page}: "
-                        f"+{len(created)} created, {len(skipped)} skipped, {len(failed)} failed "
-                        f"(totals: created={j['created_count']}, skipped={j['skipped_count']}, failed={j['failed_count']})",
-                        flush=True,
-                    )
-                    if failed:
-                        for idx, f in enumerate(failed[:3], start=1):
-                            print(
-                                f"[Yiwugo Job {job_id}] Failure #{idx} (source_id={f.get('source_id')}, name={f.get('product_name')[:30]}): {f.get('reason')}",
-                                flush=True,
-                            )
-                        recent = j.setdefault("recent_failures", [])
-                        for f in failed[-5:]:
-                            recent.append({
-                                "source_id": f.get("source_id"),
-                                "product_name": f.get("product_name", "")[:60],
-                                "reason": f.get("reason", "")[:300],
-                            })
-                        j["recent_failures"] = recent[-10:]
+
+                print(
+                    f"[Yiwugo Job {job_id}] [{part_name}] Page {current_page}/100: "
+                    f"+{len(created)} created, {len(skipped)} skipped, {len(failed)} failed "
+                    f"(Totals: created={j['created_count']}, skipped={j['skipped_count']}, failed={j['failed_count']})",
+                    flush=True,
+                )
+
+                if failed:
+                    for idx, f in enumerate(failed[:3], start=1):
+                        print(
+                            f"[Yiwugo Job {job_id}] Failure #{idx} (source_id={f.get('source_id')}, name={f.get('product_name')[:30]}): {f.get('reason')}",
+                            flush=True,
+                        )
+                    recent = j.setdefault("recent_failures", [])
+                    for f in failed[-5:]:
+                        recent.append({
+                            "source_id": f.get("source_id"),
+                            "product_name": f.get("product_name", "")[:60],
+                            "reason": f.get("reason", "")[:300],
+                        })
+                    j["recent_failures"] = recent[-10:]
+
+            with YUWI_GO_JOBS_LOCK:
+                j = YUWI_GO_IMPORT_JOBS.get(job_id)
+                if j:
+                    j["partitions_completed"] = part_idx
 
         with YUWI_GO_JOBS_LOCK:
             YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "completed"
+        print(f"[Yiwugo Job {job_id}] Completed Automated Multi-Partition Crawl across all partitions successfully!", flush=True)
+
     except Exception as exc:
         with YUWI_GO_JOBS_LOCK:
             YUWI_GO_IMPORT_JOBS[job_id]["job_status"] = "failed"
