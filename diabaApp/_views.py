@@ -5370,16 +5370,15 @@ def category_with_subcategory_data(request):
         # print(all_category, 'all_category')
         list_data = []
         for category in all_category:
-            check_subcategory_count = models.SubCategoryDetail.objects.filter(category = category.id).count()
-            if check_subcategory_count > 0:
+            subcategory_list = models.SubCategoryDetail.objects.filter(category = category.id, status = 'Active')
+            if subcategory_list.exists():
                 category_data = models.CategoryDetail.objects.get(id = category.id) 
                 category_serializer = CategoryDetailSerializer(category_data).data
-
-                subcategory_list = models.SubCategoryDetail.objects.filter(category = category.id, status = 'Active')
                 subcategory_serializer = SubCategoryListSerializer(subcategory_list, many=True).data
 
-                category_serializer.update({'items':subcategory_serializer})
-                list_data.append(category_serializer)
+                if subcategory_serializer:
+                    category_serializer.update({'items':subcategory_serializer})
+                    list_data.append(category_serializer)
         
         res={
             'data':list_data

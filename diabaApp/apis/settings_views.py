@@ -108,7 +108,11 @@ def app_dashboard(request):
     country = python_data.get('countryName', 'Egypt')
     ip_address = python_data.get('ip_address')
     user_id = python_data.get('user_id')
+    if user_id in [None, '', 'null', 'None']:
+        user_id = None
     country_id = python_data.get('country_id', None)
+    if country_id in [None, '', 'null', 'None']:
+        country_id = None
 
     try:
         page_number = int(python_data.get('page_number', 1))
@@ -167,17 +171,39 @@ def app_dashboard(request):
     last_row = page_record * page_number
     first_row = last_row - page_record
 
-    base_qs = models.ProductDetail.objects.filter(status='Active').exclude(category__category='Intimate Universe and Comfort')
+    base_qs = models.ProductDetail.objects.filter(status='Active').exclude(category__category__in=['Univers Intime et Confort', 'Intimate Universe and Comfort'])
     if country_id is not None:
         base_qs = base_qs.filter(available_country=country_id)
-        cache_key = f"dashboard_pids_country_{country_id}"
-    else:
-        cache_key = "dashboard_pids_all"
 
-    cached_ids = cache.get(cache_key)
-    if cached_ids is None:
+    client_identifier = None
+    if user_id:
+        client_identifier = f"user_{user_id}"
+    elif request.META.get('HTTP_AUTHORIZATION'):
+        auth_header = request.META.get('HTTP_AUTHORIZATION')
+        client_identifier = f"auth_{abs(hash(auth_header))}"
+    elif ip_address:
+        client_identifier = f"ip_{ip_address}"
+    else:
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0].strip()
+        else:
+            ip = request.META.get('REMOTE_ADDR', 'default')
+        client_identifier = f"ip_{ip}"
+
+    if country_id is not None:
+        cache_key = f"dashboard_pids_{client_identifier}_country_{country_id}"
+    else:
+        cache_key = f"dashboard_pids_{client_identifier}_all"
+
+    if page_number <= 1:
         cached_ids = list(base_qs.order_by(Random()).values_list('id', flat=True)[:500])
         cache.set(cache_key, cached_ids, 600)
+    else:
+        cached_ids = cache.get(cache_key)
+        if not cached_ids:
+            cached_ids = list(base_qs.order_by(Random()).values_list('id', flat=True)[:500])
+            cache.set(cache_key, cached_ids, 600)
 
     total_records = len(cached_ids)
     total_pages = math.ceil(total_records / page_record) if total_records > 0 else 1
