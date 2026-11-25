@@ -31,49 +31,74 @@ IMAGE_URL = settings.IMAGE_URL
 
 @csrf_exempt
 def chat_history(request):
-    json_data = request.body
-    stream = io.BytesIO(json_data)
-    python_data = JSONParser().parse(stream)
-    
-    room = python_data.get('room')
-    user_type = python_data.get('user_type') or python_data.get('sender') or python_data.get('send_by') or python_data.get('role')
-    user_id = python_data.get('user_id')
-    agent_id = python_data.get('agent_id')
-    admin_id = python_data.get('admin_id')
+    if request.method in ["POST", "GET"]:
+        python_data = {}
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+            except Exception:
+                pass
 
-    if not user_type:
-        if admin_id:
-            user_type = "Admin"
-        elif agent_id:
-            user_type = "Agent"
-        elif user_id:
-            user_type = "User"
+        try:
+            page_number = max(int(python_data.get('page_number', 1) or request.GET.get('page_number', 1)), 1)
+        except (ValueError, TypeError):
+            page_number = 1
 
-    # print("python_data--ChatHIstory-->",python_data)
+        try:
+            row_size = max(int(python_data.get('row_data', 10) or request.GET.get('row_data', 10)), 1)
+        except (ValueError, TypeError):
+            row_size = 10
 
-    messages = models.ChatConversion.objects.filter(room__room=room).order_by("create_at")
-    messages_serializer = ChatConversionSerializer(
-        messages, 
-        many=True, 
-        context={
-            'user_type': user_type,
-            'user_id': user_id,
-            'agent_id': agent_id,
-            'admin_id': admin_id
+        last_row = row_size * page_number
+        first_row = last_row - row_size
+
+        room = python_data.get('room') or request.GET.get('room')
+        user_type = python_data.get('user_type') or python_data.get('sender') or python_data.get('send_by') or python_data.get('role') or request.GET.get('user_type')
+        user_id = python_data.get('user_id') or request.GET.get('user_id')
+        agent_id = python_data.get('agent_id') or request.GET.get('agent_id')
+        admin_id = python_data.get('admin_id') or request.GET.get('admin_id')
+
+        if not user_type:
+            if admin_id:
+                user_type = "Admin"
+            elif agent_id:
+                user_type = "Agent"
+            elif user_id:
+                user_type = "User"
+
+        messages_qs = models.ChatConversion.objects.filter(room__room=room).order_by("-create_at", "-id")
+        total_records = messages_qs.count()
+
+        messages = messages_qs[first_row:last_row]
+        messages_serializer = ChatConversionSerializer(
+            messages, 
+            many=True, 
+            context={
+                'user_type': user_type,
+                'user_id': user_id,
+                'agent_id': agent_id,
+                'admin_id': admin_id
+            }
+        ).data
+
+        # Update Unseen Message toooo Seen
+        user_type_str = str(user_type).lower() if user_type else ""
+        if user_type_str in ["agent", "admin"]:
+            models.ChatConversion.objects.filter(room__room=room, status="Unseen").exclude(send_by__in=["Agent", "Admin", "agent", "admin"]).update(status="Seen")
+        else:
+            models.ChatConversion.objects.filter(room__room=room, status="Unseen").exclude(send_by__in=["User", "user", "Customer", "customer"]).update(status="Seen")
+
+        res = {
+            'chat_data': messages_serializer,
+            'data': messages_serializer,
+            'total_records': total_records,
+            'current_page': page_number,
+            'total_pages': int(np.ceil(total_records / row_size)) if total_records > 0 else 1
         }
-    ).data
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
 
-    # Update Unseen Message toooo Seen
-    user_type_str = str(user_type).lower() if user_type else ""
-    if user_type_str in ["agent", "admin"]:
-        models.ChatConversion.objects.filter(room__room=room, status = "Unseen").exclude(send_by__in = ["Agent","Admin","agent","admin"]).update(status = "Seen")
-    else:
-        models.ChatConversion.objects.filter(room__room=room, status = "Unseen").exclude(send_by__in = ["User", "user", "Customer", "customer"]).update(status = "Seen")
-
-    res={
-        'chat_data':messages_serializer,
-    }
-    return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+    res = {'status': False, 'message': 'Invalid request method.'}
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=405)
 
 
 @csrf_exempt
