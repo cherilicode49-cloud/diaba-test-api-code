@@ -521,6 +521,12 @@ def app_version_check(request):
             }
             return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
 
+        default_store_url = (
+            'https://play.google.com/store/apps/details?id=com.diaba.ecommerce'
+            if platform_clean == 'android'
+            else 'https://apps.apple.com/app/id6754025301'
+        )
+
         setting = models.AppVersionSetting.objects.filter(platform=platform_clean).first()
         if not setting:
             # Fallback to default if record not yet saved
@@ -531,42 +537,54 @@ def app_version_check(request):
                 is_force_update=False,
                 update_title='New Version Available',
                 release_notes='Welcome to Diaba! Check out our latest updates.',
-                store_url='https://play.google.com/store/apps/details?id=com.diaba.ecommerce' if platform_clean == 'android' else 'https://apps.apple.com/app/id6754025301'
+                store_url=default_store_url,
+                is_maintenance_mode=False,
+                maintenance_message='Scheduled maintenance in progress. Please check back shortly.'
             )
 
-        app_ver = app_version or '0.0.0'
-        app_ver_parsed = parse_semver(app_ver)
-        min_ver_parsed = parse_semver(setting.min_supported_version)
-        latest_ver_parsed = parse_semver(setting.latest_version)
+        # Resolve platform-correct store_url
+        store_url = (setting.store_url or '').strip()
+        if not store_url:
+            store_url = default_store_url
+        elif platform_clean == 'ios' and 'play.google.com' in store_url:
+            store_url = default_store_url
+        elif platform_clean == 'android' and 'apple.com' in store_url:
+            store_url = default_store_url
 
-        # SemVer Hierarchy:
-        # 1. Maintenance Mode
-        if setting.is_maintenance_mode:
-            update_type = "maintenance"
-        # 2. Force Update (app_version < min_supported_version OR is_force_update and app_version < latest_version)
-        elif app_ver_parsed < min_ver_parsed:
+        is_maintenance = bool(setting.is_maintenance_mode)
+        maintenance_msg = setting.maintenance_message or 'Scheduled maintenance in progress. Please check back shortly.'
+
+        # Determine force vs optional:
+        # 1. Maintenance Mode active -> blocks user (force update payload with maintenance flag)
+        if is_maintenance:
+            is_force = True
             update_type = "force"
-        elif setting.is_force_update and (app_ver_parsed < latest_ver_parsed):
+        # 2. If client passed app_version and installed version < min_supported_version -> Force
+        elif app_version and parse_semver(str(app_version)) < parse_semver(setting.min_supported_version):
+            is_force = True
             update_type = "force"
-        # 3. Optional Update
-        elif app_ver_parsed < latest_ver_parsed:
-            update_type = "optional"
-        # 4. Up to date
+        # 3. Admin Force Update toggle
+        elif setting.is_force_update:
+            is_force = True
+            update_type = "force"
+        # 4. Optional Update (Soft update)
         else:
-            update_type = "none"
+            is_force = False
+            update_type = "optional"
 
         res = {
             'status': True,
             'message': 'Version check retrieved successfully',
             'data': {
                 'update_type': update_type,
-                'is_maintenance_mode': setting.is_maintenance_mode,
-                'maintenance_message': setting.maintenance_message or '',
+                'is_force_update': is_force,
+                'is_maintenance_mode': is_maintenance,
+                'maintenance_message': maintenance_msg,
                 'latest_version': setting.latest_version,
                 'min_supported_version': setting.min_supported_version,
-                'update_title': setting.update_title or 'Update Available',
+                'update_title': setting.update_title or 'New Version Available',
                 'release_notes': setting.release_notes or '',
-                'store_url': setting.store_url or ''
+                'store_url': store_url
             }
         }
         return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
@@ -611,13 +629,22 @@ def admin_app_versions(request):
             res = {'status': False, 'message': 'Invalid platform. Must be "android" or "ios".'}
             return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=400)
 
+        def to_bool(val):
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.strip().lower() in ['true', '1', 'yes', 'on']
+            if isinstance(val, (int, float)):
+                return val != 0
+            return False
+
         defaults = {}
         if 'latest_version' in python_data:
             defaults['latest_version'] = str(python_data.get('latest_version')).strip()
         if 'min_supported_version' in python_data:
             defaults['min_supported_version'] = str(python_data.get('min_supported_version')).strip()
         if 'is_force_update' in python_data:
-            defaults['is_force_update'] = bool(python_data.get('is_force_update'))
+            defaults['is_force_update'] = to_bool(python_data.get('is_force_update'))
         if 'update_title' in python_data:
             defaults['update_title'] = str(python_data.get('update_title')).strip()
         if 'release_notes' in python_data:
@@ -625,7 +652,7 @@ def admin_app_versions(request):
         if 'store_url' in python_data:
             defaults['store_url'] = str(python_data.get('store_url')).strip()
         if 'is_maintenance_mode' in python_data:
-            defaults['is_maintenance_mode'] = bool(python_data.get('is_maintenance_mode'))
+            defaults['is_maintenance_mode'] = to_bool(python_data.get('is_maintenance_mode'))
         if 'maintenance_message' in python_data:
             defaults['maintenance_message'] = python_data.get('maintenance_message')
 

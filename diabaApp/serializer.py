@@ -2473,7 +2473,8 @@ class AppVersionSettingSerializer(serializers.ModelSerializer):
 
 
 class AppVersionCheckResponseSerializer(serializers.Serializer):
-    update_type = serializers.CharField(help_text="One of: 'none', 'optional', 'force', 'maintenance'")
+    update_type = serializers.CharField(help_text="One of: 'optional', 'force'")
+    is_force_update = serializers.BooleanField(help_text="True when force update, False when optional")
     is_maintenance_mode = serializers.BooleanField()
     maintenance_message = serializers.CharField(allow_blank=True, allow_null=True)
     latest_version = serializers.CharField()

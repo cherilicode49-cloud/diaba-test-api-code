@@ -57,9 +57,13 @@ urlpatterns = [
     path('api/v1/app/version-check/', app_version_check, name='app_version_check_v1'),
     path('api/v1/app/version-check', app_version_check),
     path('api/app_version_check/', app_version_check, name='app_version_check'),
+    path('api/app_version_check', app_version_check),
+    path('app_version_check/', app_version_check),
+    path('app_version_check', app_version_check),
     path('api/v1/admin/app-versions/', admin_app_versions, name='admin_app_versions_v1'),
     path('api/v1/admin/app-versions', admin_app_versions),
     path('api/admin_app_versions/', admin_app_versions, name='admin_app_versions'),
+    path('api/admin_app_versions', admin_app_versions),
 
     path('api/admin_login/',admin_login, name='admin_login'), #done
     
