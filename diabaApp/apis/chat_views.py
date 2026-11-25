@@ -78,41 +78,64 @@ def chat_history(request):
 
 @csrf_exempt
 def chat_room_list(request):
-    if request.method == "POST":
+    if request.method in ["POST", "GET"]:
+        python_data = {}
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+            except Exception:
+                pass
+
         try:
-            python_data = JSONParser().parse(io.BytesIO(request.body))
-            room_status = python_data.get("room_status")
+            page_number = max(int(python_data.get('page_number', 1) or request.GET.get('page_number', 1)), 1)
+        except (ValueError, TypeError):
+            page_number = 1
 
-            if room_status == "open":
-                rooms = models.ChatRoom.objects.filter(is_resolved__in = ["false","False"]).order_by("-updated_at")
-            elif room_status == "unread":
-                last_message_subquery = models.ChatConversion.objects.filter(
-                    room=OuterRef('id')
-                ).order_by('-create_at')
+        try:
+            row_size = max(int(python_data.get('row_data', 10) or request.GET.get('row_data', 10)), 1)
+        except (ValueError, TypeError):
+            row_size = 10
 
-                rooms = models.ChatRoom.objects.annotate(
-                    last_message_sender=Subquery(last_message_subquery.values('send_by')[:1])
-                ).filter(
-                    last_message_sender__in=["user", "User"]
-                )
-            elif room_status == "resolved":
-                rooms = models.ChatRoom.objects.filter(is_resolved__in = ["true","True"]).order_by("-updated_at")
-            
-            else:
-                rooms = models.ChatRoom.objects.all().order_by("-updated_at")
+        last_row = row_size * page_number
+        first_row = last_row - row_size
 
+        room_status = python_data.get("room_status") or request.GET.get("room_status")
+        search_key = python_data.get("search_key", None) or request.GET.get("search_key", None)
 
-                # messages_serializer = ChatRoomSerializer(rooms, many=True).data
-        except:
-            rooms = models.ChatRoom.objects.all().order_by("-updated_at")
-                    
-        # messages = models.ChatRoom.objects.filter(is_resolved__in = ["false","False"]).order_by("-updated_at")
+        filter_query = Q()
+        if search_key not in [None, '', 'null']:
+            filter_query = Q(user__name__icontains=search_key) | Q(user__email__icontains=search_key) | Q(user__mobileNumber__icontains=search_key)
+
+        if room_status == "open":
+            rooms = models.ChatRoom.objects.filter(filter_query, is_resolved__in=["false", "False"]).order_by("-updated_at")
+        elif room_status == "unread":
+            last_message_subquery = models.ChatConversion.objects.filter(
+                room=OuterRef('id')
+            ).order_by('-create_at')
+
+            rooms = models.ChatRoom.objects.annotate(
+                last_message_sender=Subquery(last_message_subquery.values('send_by')[:1])
+            ).filter(
+                filter_query,
+                last_message_sender__in=["user", "User"]
+            ).order_by("-updated_at")
+        elif room_status == "resolved":
+            rooms = models.ChatRoom.objects.filter(filter_query, is_resolved__in=["true", "True"]).order_by("-updated_at")
+        else:
+            rooms = models.ChatRoom.objects.filter(filter_query).order_by("-updated_at")
+
+        total_records = rooms.count()
+        rooms = rooms[first_row:last_row]
         messages_serializer = ChatRoomSerializer(rooms, many=True).data
 
-        res={
-            'chat_data':messages_serializer
+        res = {
+            'chat_data': messages_serializer,
+            'data': messages_serializer,
+            'total_records': total_records,
+            'current_page': page_number,
+            'total_pages': int(np.ceil(total_records / row_size)) if total_records > 0 else 1
         }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
 
 
 @csrf_exempt
@@ -374,51 +397,72 @@ def chat_room_update(request):
 
 @csrf_exempt
 def agent_chat_room_list(request):
-    if request.method == "POST":
+    if request.method in ["POST", "GET"]:
+        python_data = {}
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+            except Exception:
+                pass
+
         try:
-            python_data = JSONParser().parse(io.BytesIO(request.body))
-            room_status = python_data.get("room_status")
-            agent_id = python_data.get('agent_id',None)
-            search_key = python_data.get('search_key',None)
+            page_number = max(int(python_data.get('page_number', 1) or request.GET.get('page_number', 1)), 1)
+        except (ValueError, TypeError):
+            page_number = 1
 
-            print("python_data-=-agent_chat_room_list-=-->", python_data)
+        try:
+            row_size = max(int(python_data.get('row_data', 10) or request.GET.get('row_data', 10)), 1)
+        except (ValueError, TypeError):
+            row_size = 10
 
-            filter_query = Q()
-            if search_key not in [None,'','null']:
-                filter_query = Q(user__name__icontains=search_key) | Q(user__email__icontains=search_key) | Q(user__mobileNumber__icontains=search_key)
+        last_row = row_size * page_number
+        first_row = last_row - row_size
 
-            if room_status == "open":
-                rooms = models.ChatRoom.objects.filter(filter_query, chat_agent = agent_id,is_resolved__in = ["false","False"]).order_by("-updated_at")
-            elif room_status == "unread":
-                last_message_subquery = models.ChatConversion.objects.filter(
-                    room=OuterRef('id')
-                ).order_by('-create_at')
+        room_status = python_data.get("room_status") or request.GET.get("room_status")
+        agent_id = python_data.get('agent_id', None) or request.GET.get('agent_id', None)
+        search_key = python_data.get('search_key', None) or request.GET.get('search_key', None)
 
-                rooms = models.ChatRoom.objects.annotate(
-                    last_message_sender=Subquery(last_message_subquery.values('send_by')[:1])
-                ).filter(
-                    filter_query,
-                    chat_agent = agent_id,
-                    last_message_sender__in=["user", "User"]
-                )
-            elif room_status == "resolved":
-                rooms = models.ChatRoom.objects.filter(filter_query, chat_agent = agent_id,is_resolved__in = ["true","True"]).order_by("-updated_at")
-            
-            else:
-                rooms = models.ChatRoom.objects.filter(filter_query, chat_agent = agent_id).order_by("-updated_at")
+        print("python_data-=-agent_chat_room_list-=-->", python_data)
 
+        filter_query = Q()
+        if search_key not in [None, '', 'null']:
+            filter_query = Q(user__name__icontains=search_key) | Q(user__email__icontains=search_key) | Q(user__mobileNumber__icontains=search_key)
 
-                # messages_serializer = ChatRoomSerializer(rooms, many=True).data
-        except:
-            agent_id = python_data.get('agent_id',None)
-            rooms = models.ChatRoom.objects.filter(filter_query,chat_agent = agent_id).order_by("created_at")
+        agent_filter = Q()
+        if agent_id not in [None, '', 'null']:
+            agent_filter = Q(chat_agent=agent_id)
 
+        if room_status == "open":
+            rooms = models.ChatRoom.objects.filter(filter_query, agent_filter, is_resolved__in=["false", "False"]).order_by("-updated_at")
+        elif room_status == "unread":
+            last_message_subquery = models.ChatConversion.objects.filter(
+                room=OuterRef('id')
+            ).order_by('-create_at')
 
+            rooms = models.ChatRoom.objects.annotate(
+                last_message_sender=Subquery(last_message_subquery.values('send_by')[:1])
+            ).filter(
+                filter_query,
+                agent_filter,
+                last_message_sender__in=["user", "User"]
+            ).order_by("-updated_at")
+        elif room_status == "resolved":
+            rooms = models.ChatRoom.objects.filter(filter_query, agent_filter, is_resolved__in=["true", "True"]).order_by("-updated_at")
+        else:
+            rooms = models.ChatRoom.objects.filter(filter_query, agent_filter).order_by("-updated_at")
+
+        total_records = rooms.count()
+        rooms = rooms[first_row:last_row]
         messages_serializer = ChatRoomSerializer(rooms, many=True).data
-        res={
-            'chat_data':messages_serializer
+
+        res = {
+            'chat_data': messages_serializer,
+            'data': messages_serializer,
+            'total_records': total_records,
+            'current_page': page_number,
+            'total_pages': int(np.ceil(total_records / row_size)) if total_records > 0 else 1
         }
-        return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+        return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
 
 
 @csrf_exempt
@@ -715,15 +759,44 @@ def chat_agent_credentials_resend(request):
 
 @csrf_exempt
 def senior_chat_agent_list(request):
-    if request.method == "POST":
-        agent_list = models.ChatAgentDetail.objects.filter(agent_type = 'senior')
+    if request.method in ["POST", "GET"]:
+        python_data = {}
+        if request.body:
+            try:
+                python_data = JSONParser().parse(io.BytesIO(request.body))
+            except Exception:
+                pass
+
+        try:
+            page_number = max(int(python_data.get('page_number', 1) or request.GET.get('page_number', 1)), 1)
+        except (ValueError, TypeError):
+            page_number = 1
+
+        try:
+            row_size = max(int(python_data.get('row_data', 10) or request.GET.get('row_data', 10)), 1)
+        except (ValueError, TypeError):
+            row_size = 10
+
+        last_row = row_size * page_number
+        first_row = last_row - row_size
+
+        search_key = python_data.get('search_key', None) or request.GET.get('search_key', None)
+        filter_query = Q(agent_type='senior')
+        if search_key not in [None, '', 'null']:
+            filter_query &= (Q(name__icontains=search_key) | Q(email__icontains=search_key) | Q(mobileNumber__icontains=search_key))
+
+        total_records = models.ChatAgentDetail.objects.filter(filter_query).count()
+        agent_list = models.ChatAgentDetail.objects.filter(filter_query).order_by('-id')[first_row:last_row]
         agent_list_serializer = AdminChatAgentDetailSerializer(agent_list, many=True).data
 
-        res={
-            'data':agent_list_serializer
+        res = {
+            'data': agent_list_serializer,
+            'total_records': total_records,
+            'current_page': page_number,
+            'total_pages': int(np.ceil(total_records / row_size)) if total_records > 0 else 1
         }
         json_data = JSONRenderer().render(res)
-        return HttpResponse(json_data, content_type= 'application/json', status=200)
+        return HttpResponse(json_data, content_type='application/json', status=200)
 
 
 
