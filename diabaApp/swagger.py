@@ -247,6 +247,484 @@ def format_summary(func_name):
     words = func_name.replace('__', '_').split('_')
     return ' '.join(w.capitalize() for w in words if w)
 
+# Detailed schemas and parameters for Product Model & Variant Creation
+PRODUCT_MODEL_VARIANT_CREATE_DESCRIPTION = """### 📦 Product Creation with Models, Variants & Specifications
+
+Creates a comprehensive product entry with multipart file uploads, JSON-encoded specifications, and hierarchical nested models and variants.
+
+#### 📌 Key Requirements & Protocols:
+1. **Content-Type**: Must be `multipart/form-data`.
+2. **`other_specification`**: Required JSON string representing an array of specifications:
+   ```json
+   [
+     {
+       "key": "Battery Life",
+       "key_french": "Autonomie",
+       "value": "30 Hours",
+       "value_french": "30 Heures"
+     },
+     {
+       "key": "Bluetooth Version",
+       "key_french": "Version Bluetooth",
+       "value": "5.3",
+       "value_french": "5.3"
+     }
+   ]
+   ```
+3. **Hierarchical Models & Variants Format**:
+   Submitted as indexed form fields from index `0` up to `499`:
+   - **Model `i`**:
+     - `models[{i}][name]` *(Required)*: Model name in English (e.g., `models[0][name]=Pro Edition`)
+     - `models[{i}][model_name_french]`: Model name in French (e.g., `models[0][model_name_french]=Édition Pro`)
+     - `models[{i}][image]`: Binary file upload for the model image
+   - **Variant `j` under Model `i`**:
+     - `models[{i}][variants][{j}][name]` *(Required)*: Variant name (e.g., `models[0][variants][0][name]=Midnight Black / 64GB`)
+     - `models[{i}][variants][{j}][variant_name_french]`: Variant French name
+     - `models[{i}][variants][{j}][price]` *(Required)*: Selling price (e.g., `79.99`)
+     - `models[{i}][variants][{j}][image]`: Binary file upload for variant
+     - `models[{i}][variants][{j}][vendor]`: Vendor ID supplying this variant
+     - `models[{i}][variants][{j}][vendor_price]`: Vendor cost/wholesale price
+     - Dimensions: `length`, `width`, `height`, `weight`, `carton_length`, `carton_width`, `carton_height`, `carton_weight` (falls back to base product dimensions if omitted)
+4. **Automatic Lowest Price Assignment**:
+   The base product's `price` field is automatically set to the minimum price among all submitted variants.
+5. **Image Vector Extraction**:
+   Submitted product images (`product_image_1` to `product_image_8`) automatically have visual search vectors extracted and stored for image-based recommendations.
+6. **Role Behavior (`login_flag`)**:
+   - `'Admin'`: Automatically approves the product (`product_verification='Approved'`, `status='Approved'`).
+   - `'Vendor'`: Keeps product in review (`product_verification='Pending'`, `status='Pending'`).
+"""
+
+PRODUCT_MODEL_VARIANT_UPDATE_DESCRIPTION = """### 📦 Product Update with Models, Variants & Specifications
+
+Updates an existing product entry including base details, JSON specifications, media gallery, and nested models/variants.
+
+- **Content-Type**: Must be `multipart/form-data`.
+- **`id`**: Product ID to update *(Required)*.
+- **`other_specification`**: JSON array string of updated specifications.
+- **Nested Models & Variants**: Accepts updated or new indexed entries (`models[0][name]`, `models[0][variants][0][name]`, etc.).
+"""
+
+PRODUCT_MODEL_VARIANT_CREATE_PROPERTIES = {
+    # --- Base Product Info ---
+    'product_name': {
+        'type': 'string',
+        'description': 'Product name in English (Required)',
+        'example': 'Wireless Noise-Canceling Over-Ear Headphones'
+    },
+    'product_name_french': {
+        'type': 'string',
+        'description': 'Product name in French (Required)',
+        'example': 'Casque circum-auriculaire sans fil antibruit'
+    },
+    'category': {
+        'type': 'integer',
+        'description': 'Category ID (Required)',
+        'example': 1
+    },
+    'subcategory': {
+        'type': 'integer',
+        'description': 'SubCategory ID (Required)',
+        'example': 4
+    },
+    'vendor': {
+        'type': 'integer',
+        'description': 'Vendor ID owning this product (Required)',
+        'example': 2
+    },
+    'description': {
+        'type': 'string',
+        'description': 'Detailed product description in English',
+        'example': 'Premium high-fidelity audio with active noise cancellation and 30-hour battery life.'
+    },
+    'description_french': {
+        'type': 'string',
+        'description': 'Detailed product description in French',
+        'example': 'Audio haute fidélité haut de gamme avec réduction active du bruit et autonomie de 30 heures.'
+    },
+    'unit_of_measure': {
+        'type': 'string',
+        'description': 'Unit of measurement (e.g. piece, box, set, kg, pair)',
+        'example': 'piece'
+    },
+    'material': {
+        'type': 'string',
+        'description': 'Product material / composition',
+        'example': 'Aluminum & Memory Foam'
+    },
+    'color': {
+        'type': 'string',
+        'description': 'Default / primary product color',
+        'example': 'Matte Black'
+    },
+    'country_of_origin': {
+        'type': 'integer',
+        'description': 'CountryWithCurrency ID for country of manufacture',
+        'example': 1
+    },
+
+    # --- Pricing & Inventory ---
+    'price': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Base price. Note: The system will automatically overwrite product price with the lowest variant price upon creation.',
+        'example': 89.99
+    },
+    'discount': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Discount percentage or amount',
+        'example': 10.00
+    },
+    'final_price': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Final calculated price after discount',
+        'example': 79.99
+    },
+    'price_currency': {
+        'type': 'string',
+        'enum': ['USD', 'XOF'],
+        'description': "Currency code of submitted variant prices ('USD' or 'XOF'). If 'XOF', prices are converted to USD at system conversion rate.",
+        'example': 'USD'
+    },
+    'quantity': {
+        'type': 'integer',
+        'description': 'Total inventory stock quantity',
+        'example': 500
+    },
+    'available_quantity': {
+        'type': 'integer',
+        'description': 'Available inventory stock quantity for sale',
+        'example': 500
+    },
+    'min_order_quantity': {
+        'type': 'integer',
+        'description': 'Minimum Order Quantity (MOQ)',
+        'example': 1
+    },
+    'max_order_quantity': {
+        'type': 'integer',
+        'description': 'Maximum Order Quantity per purchase',
+        'example': 50
+    },
+
+    # --- Product Dimensions & Shipping Carton ---
+    'length': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Product item length in cm',
+        'example': 18.5
+    },
+    'width': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Product item width in cm',
+        'example': 15.0
+    },
+    'height': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Product item height in cm',
+        'example': 7.5
+    },
+    'weight': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Product item weight in kg',
+        'example': 0.35
+    },
+    'carton_length': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Outer shipping carton length in cm',
+        'example': 50.0
+    },
+    'carton_width': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Outer shipping carton width in cm',
+        'example': 40.0
+    },
+    'carton_height': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Outer shipping carton height in cm',
+        'example': 35.0
+    },
+    'carton_weight': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Outer shipping carton gross weight in kg',
+        'example': 12.5
+    },
+
+    # --- Logistics & Delays ---
+    'shipping_via': {
+        'type': 'string',
+        'description': 'Default shipping mode (e.g. Air, Sea, Express)',
+        'example': 'Air'
+    },
+    'delay_days_air': {
+        'type': 'integer',
+        'description': 'Estimated delivery duration in days for Air freight',
+        'example': 15
+    },
+    'delay_days_ship': {
+        'type': 'integer',
+        'description': 'Estimated delivery duration in days for Sea freight',
+        'example': 45
+    },
+    'delay_days_express': {
+        'type': 'integer',
+        'description': 'Estimated delivery duration in days for Express courier',
+        'example': 7
+    },
+    'available_country': {
+        'type': 'string',
+        'description': 'Target countries for sale. Comma-separated Country IDs string (e.g. "1,2,3") or JSON array string "[1,2,3]".',
+        'example': '1,2,3'
+    },
+    'tag': {
+        'type': 'string',
+        'description': 'Product tags. Comma-separated Tag IDs string (e.g. "1,4") or JSON array string "[1,4]".',
+        'example': '1,4'
+    },
+    'product_type': {
+        'type': 'integer',
+        'description': 'ProductType ID',
+        'example': 1
+    },
+    'product_packaging': {
+        'type': 'integer',
+        'description': 'ProductPackaging ID',
+        'example': 1
+    },
+    'product_packaging_value': {
+        'type': 'string',
+        'description': 'Packaging description / packaging value',
+        'example': 'Retail Color Box'
+    },
+
+    # --- Admin / Flags ---
+    'login_flag': {
+        'type': 'string',
+        'enum': ['Admin', 'Vendor'],
+        'description': "Role submitting the product. 'Admin' automatically marks product verification and status as 'Approved'; 'Vendor' marks it as 'Pending'.",
+        'example': 'Admin'
+    },
+    'is_inquiry': {
+        'type': 'integer',
+        'enum': [0, 1],
+        'description': '1 if this is a quotation/inquiry-only product; 0 for standard purchasable item.',
+        'example': 0
+    },
+    'refpro': {
+        'type': 'string',
+        'description': 'External reference product code',
+        'example': 'REF-WH-1000XM4'
+    },
+    'reuser': {
+        'type': 'string',
+        'description': 'Reference user code / creator tag',
+        'example': 'USER-102'
+    },
+
+    # --- Specifications (JSON String) ---
+    'other_specification': {
+        'type': 'string',
+        'description': (
+            'Required JSON string representing an array of specification objects. '
+            'Each object must contain: key, key_french, value, value_french.'
+        ),
+        'example': '[{"key": "Bluetooth Version", "key_french": "Version Bluetooth", "value": "5.3", "value_french": "5.3"}, {"key": "Battery Life", "key_french": "Autonomie de la batterie", "value": "30 Hours", "value_french": "30 Heures"}]'
+    },
+
+    # --- Image & Media File Uploads ---
+    'product_image_1': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Primary main product image file (Required, JPEG/PNG/AVIF). Feature vector is extracted automatically.'
+    },
+    'product_image_2': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Gallery image #2 (JPEG/PNG/AVIF)'
+    },
+    'product_image_3': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Gallery image #3 (JPEG/PNG/AVIF)'
+    },
+    'product_image_4': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Gallery image #4 (JPEG/PNG/AVIF)'
+    },
+    'product_image_5': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Gallery image #5 (JPEG/PNG/AVIF)'
+    },
+    'product_image_6': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Gallery image #6 (JPEG/PNG/AVIF)'
+    },
+    'product_image_7': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Gallery image #7 (JPEG/PNG/AVIF)'
+    },
+    'product_image_8': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Gallery image #8 (JPEG/PNG/AVIF)'
+    },
+    'product_video': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Product demo video file (MP4) or video URL string'
+    },
+
+    # --- Dynamic Models & Variants (Indexed 0..499) ---
+    # Model 0
+    'models[0][name]': {
+        'type': 'string',
+        'description': 'Model 0 name in English (Required for Model 0)',
+        'example': 'Pro Edition'
+    },
+    'models[0][model_name_french]': {
+        'type': 'string',
+        'description': 'Model 0 name in French',
+        'example': 'Édition Pro'
+    },
+    'models[0][image]': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Model 0 image file upload'
+    },
+
+    # Model 0 -> Variant 0
+    'models[0][variants][0][name]': {
+        'type': 'string',
+        'description': 'Model 0 Variant 0 name in English (Required for Variant 0)',
+        'example': 'Midnight Black / 64GB'
+    },
+    'models[0][variants][0][variant_name_french]': {
+        'type': 'string',
+        'description': 'Model 0 Variant 0 name in French',
+        'example': 'Noir Minuit / 64Go'
+    },
+    'models[0][variants][0][image]': {
+        'type': 'string',
+        'format': 'binary',
+        'description': 'Model 0 Variant 0 image file upload'
+    },
+    'models[0][variants][0][price]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Model 0 Variant 0 selling price (Required)',
+        'example': 79.99
+    },
+    'models[0][variants][0][vendor]': {
+        'type': 'integer',
+        'description': 'Vendor ID supplying Model 0 Variant 0',
+        'example': 2
+    },
+    'models[0][variants][0][vendor_price]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Vendor cost price for Model 0 Variant 0',
+        'example': 55.00
+    },
+    'models[0][variants][0][length]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 specific length in cm (optional; falls back to product length)',
+        'example': 18.5
+    },
+    'models[0][variants][0][width]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 specific width in cm (optional; falls back to product width)',
+        'example': 15.0
+    },
+    'models[0][variants][0][height]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 specific height in cm (optional; falls back to product height)',
+        'example': 7.5
+    },
+    'models[0][variants][0][weight]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 specific weight in kg (optional; falls back to product weight)',
+        'example': 0.35
+    },
+    'models[0][variants][0][carton_length]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 carton length in cm',
+        'example': 50.0
+    },
+    'models[0][variants][0][carton_width]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 carton width in cm',
+        'example': 40.0
+    },
+    'models[0][variants][0][carton_height]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 carton height in cm',
+        'example': 35.0
+    },
+    'models[0][variants][0][carton_weight]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Variant 0 carton weight in kg',
+        'example': 12.5
+    },
+
+    # Model 0 -> Variant 1 (Example of 2nd variant)
+    'models[0][variants][1][name]': {
+        'type': 'string',
+        'description': 'Model 0 Variant 1 name in English (Example of additional variant)',
+        'example': 'Silver Platinum / 128GB'
+    },
+    'models[0][variants][1][variant_name_french]': {
+        'type': 'string',
+        'description': 'Model 0 Variant 1 name in French',
+        'example': 'Argent Platine / 128Go'
+    },
+    'models[0][variants][1][price]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Model 0 Variant 1 selling price',
+        'example': 89.99
+    },
+    'models[0][variants][1][vendor]': {
+        'type': 'integer',
+        'description': 'Vendor ID supplying Model 0 Variant 1',
+        'example': 2
+    },
+    'models[0][variants][1][vendor_price]': {
+        'type': 'number',
+        'format': 'float',
+        'description': 'Vendor cost price for Model 0 Variant 1',
+        'example': 62.00
+    },
+}
+
+PRODUCT_MODEL_VARIANT_UPDATE_PROPERTIES = {
+    'id': {
+        'type': 'integer',
+        'description': 'Product ID to update (Required)',
+        'example': 105
+    },
+    **PRODUCT_MODEL_VARIANT_CREATE_PROPERTIES,
+}
+
 class CodebaseInspector:
     def __init__(self, base_dir=None):
         if base_dir is None:
@@ -716,7 +1194,75 @@ def build_openapi_spec(base_url=""):
                     else:
                         all_body = []
 
-                if files or all_body:
+                if path == '/api/product_model_variant_create/':
+                    operation['summary'] = "📦 Create Product with Models, Variants & Specifications (Multipart)"
+                    operation['description'] = PRODUCT_MODEL_VARIANT_CREATE_DESCRIPTION
+                    operation['requestBody'] = {
+                        'required': True,
+                        'description': 'Product creation payload with multipart form-data including base details, JSON specifications, media files, and nested models/variants.',
+                        'content': {
+                            'multipart/form-data': {
+                                'schema': {
+                                    'type': 'object',
+                                    'required': [
+                                        'product_name',
+                                        'product_name_french',
+                                        'category',
+                                        'subcategory',
+                                        'vendor',
+                                        'other_specification',
+                                        'models[0][name]',
+                                        'models[0][variants][0][name]',
+                                        'models[0][variants][0][price]'
+                                    ],
+                                    'properties': PRODUCT_MODEL_VARIANT_CREATE_PROPERTIES
+                                }
+                            }
+                        }
+                    }
+                    operation['responses']['200'] = {
+                        'description': 'Product created successfully along with models, variants, specifications, and vector embeddings.',
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'message': {'type': 'string', 'example': 'Project create successfully.'}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                elif path == '/api/product_model_variant_update/':
+                    operation['summary'] = "📦 Update Product with Models, Variants & Specifications (Multipart)"
+                    operation['description'] = PRODUCT_MODEL_VARIANT_UPDATE_DESCRIPTION
+                    operation['requestBody'] = {
+                        'required': True,
+                        'description': 'Product update payload with multipart form-data including product ID, base details, JSON specifications, media files, and nested models/variants.',
+                        'content': {
+                            'multipart/form-data': {
+                                'schema': {
+                                    'type': 'object',
+                                    'required': ['id', 'product_name', 'product_name_french', 'category', 'subcategory'],
+                                    'properties': PRODUCT_MODEL_VARIANT_UPDATE_PROPERTIES
+                                }
+                            }
+                        }
+                    }
+                    operation['responses']['200'] = {
+                        'description': 'Product updated successfully',
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'message': {'type': 'string', 'example': 'Project update successfully.'}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                elif files or all_body:
                     properties = {}
                     for bp in all_body:
                         properties[bp] = guess_type_and_schema(bp)
@@ -846,6 +1392,22 @@ def build_openapi_spec(base_url=""):
                         'is_maintenance_mode': {'type': 'boolean', 'example': False},
                         'maintenance_message': {'type': 'string', 'example': ''},
                         'updated_at': {'type': 'string', 'format': 'date-time', 'example': '2026-11-24T15:00:00Z'}
+                    }
+                },
+                'ProductSpecificationItem': {
+                    'type': 'object',
+                    'required': ['key', 'key_french', 'value', 'value_french'],
+                    'properties': {
+                        'key': {'type': 'string', 'example': 'Battery Life', 'description': 'Specification attribute in English'},
+                        'key_french': {'type': 'string', 'example': 'Autonomie', 'description': 'Specification attribute in French'},
+                        'value': {'type': 'string', 'example': '30 Hours', 'description': 'Specification value in English'},
+                        'value_french': {'type': 'string', 'example': '30 Heures', 'description': 'Specification value in French'}
+                    }
+                },
+                'ProductModelVariantCreateResponse': {
+                    'type': 'object',
+                    'properties': {
+                        'message': {'type': 'string', 'example': 'Project create successfully.'}
                     }
                 }
             },
