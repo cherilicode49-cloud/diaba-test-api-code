@@ -123,7 +123,7 @@ def product_inquiry_form(request):
 
                 # AUTOMATIC WALLET TRANSFER:
                 # If is_free_inquiry is True: no record is added to wallet.
-                # If is_free_inquiry is False: automatic payable amount transferred to customer wallet with all currency values.
+                # If is_free_inquiry is False: automatic payable amount transferred to customer wallet using frontend-sent currency.
                 wallet_credit_info = None
                 if not is_free_inquiry and customer_id:
                     try:
@@ -136,33 +136,52 @@ def product_inquiry_form(request):
                         if customer:
                             now = timezone.now()
                             rates = get_all_currency_rates()
-                            usd_amount = convert_to_usd(payable_num, currency, rates)
+                            sent_curr = (currency or configured_currency or "XOF").upper().strip()
+                            usd_amount = convert_to_usd(payable_num, sent_curr, rates)
                             locked_values = calculate_locked_values(usd_amount, rates)
-                            usd_decimal = Decimal(str(round(usd_amount, 2)))
+                            locked_values[sent_curr] = round(payable_num, 2)
 
-                            wallet, _ = models.CustomerWallet.objects.select_for_update().get_or_create(
-                                customer=customer,
-                                defaults={'balance': Decimal('0.00'), 'currency': 'USD', 'status': 'Active'}
-                            )
+                            wallet = models.CustomerWallet.objects.select_for_update().filter(customer=customer).first()
+                            if not wallet:
+                                wallet = models.CustomerWallet.objects.create(
+                                    customer=customer,
+                                    balance=Decimal(str(round(payable_num, 2))),
+                                    currency=sent_curr,
+                                    status='Active'
+                                )
+                                balance_before = Decimal('0.00')
+                                balance_after = wallet.balance
+                            else:
+                                balance_before = wallet.balance
+                                # If existing wallet had 0 balance or default USD with 0 balance, adopt the sent currency
+                                if wallet.balance == 0:
+                                    wallet.currency = sent_curr
+                                    credit_val = Decimal(str(round(payable_num, 2)))
+                                elif wallet.currency.upper() == sent_curr:
+                                    credit_val = Decimal(str(round(payable_num, 2)))
+                                else:
+                                    # Convert according to wallet's current currency
+                                    wallet_rate = rates.get(wallet.currency.upper(), 1.0)
+                                    converted_val = round(usd_amount * wallet_rate, 2) if wallet.currency.upper() != 'USD' else round(usd_amount, 2)
+                                    credit_val = Decimal(str(converted_val))
 
-                            balance_before = wallet.balance
-                            balance_after = balance_before + usd_decimal
-                            wallet.balance = balance_after
-                            wallet.save(update_fields=['balance', 'updated_at'])
+                                balance_after = balance_before + credit_val
+                                wallet.balance = balance_after
+                                wallet.save(update_fields=['balance', 'currency', 'updated_at'])
 
                             tx_ref = f"WTX-INQ-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
                             models.WalletTransaction.objects.create(
                                 wallet=wallet,
                                 customer=customer,
                                 transaction_type='Credit',
-                                amount=usd_decimal,
-                                currency='USD',
+                                amount=Decimal(str(round(payable_num, 2))),
+                                currency=sent_curr,
                                 balance_before=balance_before,
                                 balance_after=balance_after,
                                 source_type='Inquiry_Payment',
                                 source_id=inquiry_code,
                                 transaction_ref=tx_ref,
-                                description=f"Automatic inquiry transfer to wallet: {inquiry_code} ({payable_num} {currency})",
+                                description=f"Automatic inquiry transfer to wallet: {inquiry_code} ({payable_num} {sent_curr})",
                                 rates_snapshot=rates,
                                 locked_values=locked_values,
                                 status='Success'
@@ -180,9 +199,9 @@ def product_inquiry_form(request):
                             wallet_credit_info = {
                                 'transaction_ref': tx_ref,
                                 'credited_amount': payable_num,
-                                'currency': currency,
-                                'credited_usd': float(usd_decimal),
-                                'balance_after_usd': float(balance_after),
+                                'currency': sent_curr,
+                                'wallet_balance': float(wallet.balance),
+                                'wallet_currency': wallet.currency,
                                 'locked_values': locked_values
                             }
 

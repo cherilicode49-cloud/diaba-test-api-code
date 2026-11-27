@@ -94,7 +94,9 @@ def customer_wallet_balance(request):
         )
 
         rates = get_all_currency_rates()
-        locked_conversions = calculate_locked_values(wallet.balance, rates)
+        usd_balance = convert_to_usd(wallet.balance, wallet.currency, rates)
+        locked_conversions = calculate_locked_values(usd_balance, rates)
+        locked_conversions[wallet.currency] = float(wallet.balance)
 
         total_credits = models.WalletTransaction.objects.filter(
             customer=customer, transaction_type='Credit', status='Success'
