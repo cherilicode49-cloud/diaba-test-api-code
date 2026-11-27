@@ -521,13 +521,13 @@ def inquiry_amount(request):
 
     data = {
         'is_free_inquiry': is_free,
-        'free_inquiry': is_free,
-        'inquiry_price': base_price,
-        'inquiry_currency': base_currency,
+        # 'free_inquiry': is_free,
+        # 'inquiry_price': base_price,
+        # 'inquiry_currency': base_currency,
         'amount': display_amount,
         'currency': target_currency,
         'all_currencies': all_conversions,
-        'rates': rates
+        # 'rates': rates
     }
 
     res = {
