@@ -64,11 +64,86 @@ def calculate_locked_values(usd_amount, rates):
     return values
 
 
+def compute_customer_locked_balances(customer, wallet, rates):
+    """
+    Computes exact wallet balances across all currencies using historical locked_values
+    stored in WalletTransaction records. Eliminates live exchange rate drift for
+    transferred inquiries and credits.
+    """
+    if not wallet or wallet.balance <= Decimal('0.00'):
+        return {code: 0.0 for code in rates}
+
+    tx_qs = models.WalletTransaction.objects.filter(
+        customer=customer,
+        status='Success'
+    ).order_by('id')
+
+    if not tx_qs.exists():
+        usd_balance = convert_to_usd(wallet.balance, wallet.currency, rates)
+        conversions = calculate_locked_values(usd_balance, rates)
+        if wallet.currency:
+            conversions[wallet.currency.upper()] = float(wallet.balance)
+        return conversions
+
+    conversions = {}
+    for code, rate in rates.items():
+        total_credit = 0.0
+        total_debit = 0.0
+        has_locked = False
+
+        for tx in tx_qs:
+            tx_locked = tx.locked_values if isinstance(tx.locked_values, dict) else {}
+            if tx.transaction_type == 'Credit':
+                if code in tx_locked:
+                    try:
+                        total_credit += float(tx_locked[code])
+                        has_locked = True
+                    except (ValueError, TypeError):
+                        pass
+                elif tx.currency and tx.currency.upper() == code:
+                    total_credit += float(tx.amount)
+                    has_locked = True
+                else:
+                    tx_rates = tx.rates_snapshot if isinstance(tx.rates_snapshot, dict) and tx.rates_snapshot else rates
+                    usd_val = convert_to_usd(tx.amount, tx.currency, tx_rates)
+                    r = tx_rates.get(code, rate)
+                    total_credit += float(usd_val * r if code != 'USD' else usd_val)
+            elif tx.transaction_type == 'Debit':
+                if code in tx_locked:
+                    try:
+                        total_debit += float(tx_locked[code])
+                    except (ValueError, TypeError):
+                        pass
+                elif tx.currency and tx.currency.upper() == code:
+                    total_debit += float(tx.amount)
+                else:
+                    tx_rates = tx.rates_snapshot if isinstance(tx.rates_snapshot, dict) and tx.rates_snapshot else rates
+                    usd_val = convert_to_usd(tx.amount, tx.currency, tx_rates)
+                    r = tx_rates.get(code, rate)
+                    total_debit += float(usd_val * r if code != 'USD' else usd_val)
+
+        net_val = max(0.0, total_credit - total_debit)
+        if not has_locked and net_val == 0.0:
+            usd_bal = convert_to_usd(wallet.balance, wallet.currency, rates)
+            net_val = round(usd_bal * rate, 2) if code != 'USD' else round(usd_bal, 2)
+
+        conversions[code] = round(net_val, 2)
+
+    # Ensure wallet's own native currency matches exact wallet balance if not already matching
+    if wallet.currency and wallet.currency.upper() in conversions:
+        conversions[wallet.currency.upper()] = float(wallet.balance)
+
+    return conversions
+
+
 @csrf_exempt
 def customer_wallet_balance(request):
     """
     Fetch customer wallet balance and live currency conversions.
-    POST JSON or GET query params: customer_id
+    POST JSON or GET query params:
+      - customer_id (required): int
+      - currency (optional): str (e.g. 'XOF', 'USD', 'XAF', 'CDF', 'GNF')
+        When currency is provided, returns exact total value converted using lock currency.
     """
     if request.method in ["POST", "GET"]:
         python_data = {}
@@ -88,23 +163,51 @@ def customer_wallet_balance(request):
             res = {'status': False, 'message': 'Customer not found.'}
             return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=404)
 
+        target_currency = (python_data.get('currency') or request.GET.get('currency') or '').strip().upper()
+
         wallet, _ = models.CustomerWallet.objects.get_or_create(
             customer=customer,
             defaults={'balance': Decimal('0.00'), 'currency': 'USD', 'status': 'Active'}
         )
 
         rates = get_all_currency_rates()
-        usd_balance = convert_to_usd(wallet.balance, wallet.currency, rates)
-        locked_conversions = calculate_locked_values(usd_balance, rates)
-        locked_conversions[wallet.currency] = float(wallet.balance)
+        locked_conversions = compute_customer_locked_balances(customer, wallet, rates)
 
-        total_credits = models.WalletTransaction.objects.filter(
+        # If a specific currency was requested that isn't in locked_conversions, convert it
+        if target_currency and target_currency not in locked_conversions:
+            usd_val = convert_to_usd(wallet.balance, wallet.currency, rates)
+            r = rates.get(target_currency, 1.0)
+            locked_conversions[target_currency] = round(usd_val * r if target_currency != 'USD' else usd_val, 2)
+
+        effective_currency = target_currency if target_currency else (wallet.currency or 'USD')
+        exact_converted_value = locked_conversions.get(effective_currency, float(wallet.balance))
+
+        # Calculate total credits and debits in USD
+        credit_txs = models.WalletTransaction.objects.filter(
             customer=customer, transaction_type='Credit', status='Success'
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        )
+        total_credits_usd = 0.0
+        for tx in credit_txs:
+            if isinstance(tx.locked_values, dict) and 'USD' in tx.locked_values:
+                try:
+                    total_credits_usd += float(tx.locked_values['USD'])
+                except (ValueError, TypeError):
+                    total_credits_usd += convert_to_usd(tx.amount, tx.currency, rates)
+            else:
+                total_credits_usd += convert_to_usd(tx.amount, tx.currency, rates)
 
-        total_debits = models.WalletTransaction.objects.filter(
+        debit_txs = models.WalletTransaction.objects.filter(
             customer=customer, transaction_type='Debit', status='Success'
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        )
+        total_debits_usd = 0.0
+        for tx in debit_txs:
+            if isinstance(tx.locked_values, dict) and 'USD' in tx.locked_values:
+                try:
+                    total_debits_usd += float(tx.locked_values['USD'])
+                except (ValueError, TypeError):
+                    total_debits_usd += convert_to_usd(tx.amount, tx.currency, rates)
+            else:
+                total_debits_usd += convert_to_usd(tx.amount, tx.currency, rates)
 
         res = {
             'status': True,
@@ -113,11 +216,17 @@ def customer_wallet_balance(request):
                 'wallet_id': wallet.id,
                 'customer_id': customer.id,
                 'customer_name': customer.name,
-                'balance': float(wallet.balance),
-                'currency': wallet.currency,
+                'balance': exact_converted_value if target_currency else float(wallet.balance),
+                'currency': effective_currency,
+                'converted_balance': exact_converted_value,
+                'locked_currency_value': exact_converted_value,
+                'total_wallet_balance': exact_converted_value,
+                'target_currency': effective_currency,
+                'wallet_balance': float(wallet.balance),
+                'wallet_currency': wallet.currency,
                 'currency_conversions': locked_conversions,
-                'total_credits_usd': float(total_credits),
-                'total_debits_usd': float(total_debits),
+                'total_credits_usd': round(total_credits_usd, 2),
+                'total_debits_usd': round(total_debits_usd, 2),
                 'status': wallet.status
             }
         }
@@ -488,24 +597,10 @@ def calculate_wallet_redemption(request):
         rates = get_all_currency_rates()
         target_rate = rates.get(target_currency, 1.0)
 
-        # Inspect locked_values from credit transactions to preserve exact paid currency amounts
-        locked_credits = models.WalletTransaction.objects.filter(
-            customer_id=customer_id,
-            transaction_type='Credit',
-            status='Success'
-        ).exclude(locked_values={})
-
-        total_locked_in_target = 0.0
-        for tx in locked_credits:
-            if isinstance(tx.locked_values, dict) and target_currency in tx.locked_values:
-                try:
-                    total_locked_in_target += float(tx.locked_values[target_currency])
-                except (ValueError, TypeError):
-                    pass
-
-        # If locked credits match wallet balance, use exact locked amount to eliminate exchange rate drift
-        if total_locked_in_target > 0 and target_rate > 0 and abs((total_locked_in_target / target_rate) - float(wallet.balance)) < 0.05:
-            wallet_val_target = total_locked_in_target
+        # Inspect locked_values to preserve exact paid currency amounts and avoid exchange rate drift
+        locked_conversions = compute_customer_locked_balances(wallet.customer, wallet, rates)
+        if target_currency in locked_conversions:
+            wallet_val_target = locked_conversions[target_currency]
         else:
             wallet_val_target = float(wallet.balance) * target_rate
 

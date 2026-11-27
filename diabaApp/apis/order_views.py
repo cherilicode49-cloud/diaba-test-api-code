@@ -20,6 +20,8 @@ from django.core.files.base import ContentFile, File
 from diabaApp.payment_gateway import APIDTSClient
 from weasyprint import HTML
 from decimal import Decimal
+import uuid
+from diabaApp.apis.wallet_views import compute_customer_locked_balances, get_all_currency_rates, convert_to_usd, calculate_locked_values
 from firebase_admin import messaging
 
 from django.template.loader import render_to_string
@@ -173,6 +175,75 @@ def _handle_order_promocodes_and_commissions(order, promocodes_input, currency_n
     return primary_name, primary_discount, applied_list
 
 
+def process_order_wallet_redemption(order, python_data, currency_name, now):
+    """
+    Checks if wallet redemption was requested for an order, deducts balance from CustomerWallet,
+    and logs an auditable Debit transaction in WalletTransaction.
+    """
+    use_wallet = python_data.get('use_wallet') or python_data.get('redeem_wallet') or python_data.get('is_wallet_redeem')
+    wallet_amount_input = python_data.get('wallet_amount') or python_data.get('wallet_amount_used')
+    is_requested = bool(use_wallet in [True, 'true', 'True', 1, '1'] or (wallet_amount_input and float(wallet_amount_input) > 0))
+
+    if not is_requested or not order or not order.customer:
+        return {'wallet_used': False, 'wallet_amount_used': 0.0}
+
+    customer_wallet = models.CustomerWallet.objects.select_for_update().filter(customer=order.customer).first()
+    if not customer_wallet or customer_wallet.balance <= Decimal('0.00'):
+        return {'wallet_used': False, 'wallet_amount_used': 0.0}
+
+    rates = get_all_currency_rates()
+    locked_balances = compute_customer_locked_balances(order.customer, customer_wallet, rates)
+    avail_in_order_curr = float(locked_balances.get(currency_name, 0.0))
+
+    if wallet_amount_input:
+        try:
+            redeem_amount = min(float(wallet_amount_input), avail_in_order_curr)
+        except (ValueError, TypeError):
+            redeem_amount = avail_in_order_curr
+    else:
+        redeem_amount = avail_in_order_curr
+
+    if redeem_amount <= 0:
+        return {'wallet_used': False, 'wallet_amount_used': 0.0}
+
+    usd_val = convert_to_usd(redeem_amount, currency_name, rates)
+    wallet_rate = rates.get(customer_wallet.currency, 1.0)
+    deduct_base = Decimal(str(round(usd_val * wallet_rate, 2) if customer_wallet.currency != 'USD' else round(usd_val, 2)))
+
+    bal_before = customer_wallet.balance
+    bal_after = max(Decimal('0.00'), bal_before - deduct_base)
+    customer_wallet.balance = bal_after
+    customer_wallet.save(update_fields=['balance', 'updated_at'])
+
+    wtx_ref = f"WTX-ORD-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+    debit_locked = calculate_locked_values(usd_val, rates)
+    debit_locked[currency_name] = round(redeem_amount, 2)
+
+    models.WalletTransaction.objects.create(
+        wallet=customer_wallet,
+        customer=order.customer,
+        transaction_type='Debit',
+        amount=Decimal(str(round(redeem_amount, 2))),
+        currency=currency_name,
+        balance_before=bal_before,
+        balance_after=bal_after,
+        source_type='Order_Redemption',
+        source_id=order.order_id,
+        transaction_ref=wtx_ref,
+        description=f"Wallet redemption applied to Order {order.order_id} ({redeem_amount} {currency_name})",
+        rates_snapshot=rates,
+        locked_values=debit_locked,
+        status='Success'
+    )
+
+    return {
+        'wallet_used': True,
+        'wallet_amount_used': redeem_amount,
+        'wallet_transaction_ref': wtx_ref,
+        'remaining_wallet_balance': float(customer_wallet.balance)
+    }
+
+
 
 @csrf_exempt
 def order_create(request):
@@ -317,6 +388,9 @@ def order_create(request):
         # print(customer_mobile, 'customer_mobile')
 
         order_id = order.id
+
+        # Process Wallet Balance Redemption if applied
+        wallet_result = process_order_wallet_redemption(order, python_data, currency_name, now)
 
         # Determine payment gateway
         detected_gateway = python_data.get('payment_gateway') or python_data.get('gateway') or network or payment_type
@@ -570,7 +644,10 @@ def order_create(request):
             'payment_type':payment_type,
             'payment_url':payment_url,
             'txn_id':reference_id,
-            'context':context
+            'context':context,
+            'wallet_used': wallet_result.get('wallet_used', False),
+            'wallet_amount_used': wallet_result.get('wallet_amount_used', 0.0),
+            'wallet_data': wallet_result
         }
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
 
@@ -718,6 +795,9 @@ def order_create_wave_orange(request):
         # print(customer_mobile, 'customer_mobile')
 
         order_id = order.id
+
+        # Process Wallet Balance Redemption if applied
+        wallet_result = process_order_wallet_redemption(order, python_data, currency_name, now)
 
         # Determine payment gateway for Wave / Orange Money
         detected_gateway = python_data.get('payment_gateway') or python_data.get('gateway') or network or 'Wave/Orange Money'
@@ -955,7 +1035,10 @@ def order_create_wave_orange(request):
             'payment_type':payment_type,
             # 'payment_url':payment_url,
             'txn_id':reference_id,
-            'context':context
+            'context':context,
+            'wallet_used': wallet_result.get('wallet_used', False),
+            'wallet_amount_used': wallet_result.get('wallet_amount_used', 0.0),
+            'wallet_data': wallet_result
         }
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
 
@@ -1046,6 +1129,9 @@ def inquiry_order_create(request):
         # print(customer_mobile, 'customer_mobile')
 
         order_id = order.id
+
+        # Process Wallet Balance Redemption if applied
+        wallet_result = process_order_wallet_redemption(order, python_data, currency_name, now)
 
 
         for product in products:
@@ -1363,6 +1449,18 @@ def customer_order_list(request):
                     list_product_data.append(product_data)
                 
                 order_serializer.update({'product':list_product_data})
+
+                # Track if wallet balance was used for this order
+                wallet_tx = models.WalletTransaction.objects.filter(
+                    source_id=order.order_id,
+                    transaction_type='Debit',
+                    status='Success'
+                ).first()
+                order_serializer['is_wallet_used'] = bool(wallet_tx)
+                order_serializer['wallet_amount_used'] = float(wallet_tx.amount) if wallet_tx else 0.0
+                order_serializer['wallet_currency'] = wallet_tx.currency if wallet_tx else order.currency_name
+                order_serializer['wallet_transaction_ref'] = wallet_tx.transaction_ref if wallet_tx else None
+
                 list_data.append(order_serializer)
 
             res={
@@ -1497,11 +1595,37 @@ def order_detail_admin(request):
         elif promocode_data:
             promocode_list_data = [promocode_data]
 
+        # Track if wallet balance was used for this order
+        wallet_tx = models.WalletTransaction.objects.filter(
+            source_id=order_data.order_id,
+            transaction_type='Debit',
+            status='Success'
+        ).first()
+        order_serializer['is_wallet_used'] = bool(wallet_tx)
+        order_serializer['wallet_amount_used'] = float(wallet_tx.amount) if wallet_tx else 0.0
+        order_serializer['wallet_currency'] = wallet_tx.currency if wallet_tx else order_data.currency_name
+        order_serializer['wallet_transaction_ref'] = wallet_tx.transaction_ref if wallet_tx else None
+
+        wallet_info = {
+            'is_wallet_used': bool(wallet_tx),
+            'wallet_amount_used': float(wallet_tx.amount) if wallet_tx else 0.0,
+            'wallet_currency': wallet_tx.currency if wallet_tx else order_data.currency_name,
+            'wallet_transaction_ref': wallet_tx.transaction_ref if wallet_tx else None,
+            'description': wallet_tx.description if wallet_tx else None,
+            'created_at': wallet_tx.created_at.strftime('%Y-%m-%d %H:%M:%S') if wallet_tx and wallet_tx.created_at else None
+        } if wallet_tx else {
+            'is_wallet_used': False,
+            'wallet_amount_used': 0.0,
+            'wallet_currency': order_data.currency_name,
+            'wallet_transaction_ref': None
+        }
+
         res={
             'data':order_serializer,
             'product_data':list_data,
             'promocode_data':promocode_data,
-            'promocodes':promocode_list_data
+            'promocodes':promocode_list_data,
+            'wallet_data': wallet_info
         }
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
 

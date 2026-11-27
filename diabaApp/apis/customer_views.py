@@ -21,6 +21,7 @@ import  requests
 from diabaApp.serializer import CustomerDetailSerializer, CustomerAddressDetailSerializer, OrderDetailDataSerializer, \
     ProductOrderDetailSerializer, CartDetailSerializer, WishlistDetailSerializer
 from diabaApp.utils import track_user_activity
+from diabaApp.apis.wallet_views import compute_customer_locked_balances, get_all_currency_rates
 
 
 @csrf_exempt
@@ -519,10 +520,25 @@ def customer_wishlist_cart_list(request):
 
                 view_fmt_wl = (lambda v: f"{float(v):,.2f}".replace(",", " ")) if is_usd_cart else (lambda v: f"{round(float(v)):,}".replace(",", " "))
 
+                wallet = models.CustomerWallet.objects.filter(customer=user).first()
+                rates = get_all_currency_rates()
+                locked_conversions = compute_customer_locked_balances(user, wallet, rates) if wallet else {}
+                wallet_balance_in_currency = locked_conversions.get(active_currency, 0.0)
+
                 res={
                     'data':wishlist_serializer,
                     'tracking_amount': tracking_amount,
-                    'tracking_amount_view': view_fmt_wl(tracking_amount)
+                    'tracking_amount_view': view_fmt_wl(tracking_amount),
+                    'wallet_balance': wallet_balance_in_currency,
+                    'wallet_balance_view': view_fmt_wl(wallet_balance_in_currency),
+                    'wallet_currency': active_currency,
+                    'wallet_data': {
+                        'wallet_id': wallet.id if wallet else None,
+                        'wallet_balance': wallet_balance_in_currency,
+                        'wallet_balance_view': view_fmt_wl(wallet_balance_in_currency),
+                        'wallet_currency': active_currency,
+                        'currency_conversions': locked_conversions
+                    }
                 }
                 return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
             
@@ -933,7 +949,74 @@ def customer_wishlist_cart_list(request):
                         'amount_to_paid': amount_to_paid,
                         'coupon_verify':False
                     }
-                
+
+                # -------------------------------------------------------------
+                # Customer Wallet Balance & Redemption Calculation
+                # -------------------------------------------------------------
+                wallet = models.CustomerWallet.objects.filter(customer=user).first()
+                rates = get_all_currency_rates()
+                locked_conversions = compute_customer_locked_balances(user, wallet, rates) if wallet else {}
+                wallet_balance_in_currency = locked_conversions.get(active_currency, 0.0)
+
+                order_payable = float(amount_to_paid_with_tax)
+                max_wallet_redemption = min(float(wallet_balance_in_currency), order_payable) if wallet_balance_in_currency > 0 else 0.0
+                max_wallet_redemption = round(max_wallet_redemption, 2) if is_usd_cart else round(max_wallet_redemption)
+
+                use_wallet = python_data.get('use_wallet') or python_data.get('redeem_wallet') or python_data.get('is_wallet_redeem')
+                is_wallet_applied = bool(use_wallet in [True, 'true', 'True', 1, '1'])
+
+                if is_wallet_applied and max_wallet_redemption > 0:
+                    applied_wallet_discount = max_wallet_redemption
+                    final_payable = max(0.0, order_payable - applied_wallet_discount)
+                    remaining_wallet_balance = max(0.0, float(wallet_balance_in_currency) - applied_wallet_discount)
+                else:
+                    applied_wallet_discount = 0.0
+                    final_payable = order_payable
+                    remaining_wallet_balance = float(wallet_balance_in_currency)
+
+                applied_wallet_discount = round(applied_wallet_discount, 2) if is_usd_cart else round(applied_wallet_discount)
+                final_payable = round(final_payable, 2) if is_usd_cart else round(final_payable)
+                remaining_wallet_balance = round(remaining_wallet_balance, 2) if is_usd_cart else round(remaining_wallet_balance)
+
+                wallet_data = {
+                    'wallet_id': wallet.id if wallet else None,
+                    'wallet_balance': wallet_balance_in_currency,
+                    'wallet_balance_view': view_fmt(wallet_balance_in_currency),
+                    'wallet_currency': active_currency,
+                    'available_wallet_balance': wallet_balance_in_currency,
+                    'available_wallet_balance_view': view_fmt(wallet_balance_in_currency),
+                    'max_redeemable_amount': max_wallet_redemption,
+                    'max_redeemable_amount_view': view_fmt(max_wallet_redemption),
+                    'is_wallet_redeem_applied': is_wallet_applied,
+                    'wallet_amount_redeemed': applied_wallet_discount,
+                    'wallet_amount_redeemed_view': view_fmt(applied_wallet_discount),
+                    'remaining_wallet_balance': remaining_wallet_balance,
+                    'remaining_wallet_balance_view': view_fmt(remaining_wallet_balance),
+                    'final_amount_to_paid': final_payable,
+                    'final_amount_to_paid_view': view_fmt(final_payable),
+                    'raw_wallet_balance': float(wallet.balance) if wallet else 0.0,
+                    'raw_wallet_currency': wallet.currency if wallet else 'USD',
+                    'currency_conversions': locked_conversions,
+                }
+
+                res['wallet_data'] = wallet_data
+                res['wallet_balance'] = wallet_balance_in_currency
+                res['wallet_balance_view'] = view_fmt(wallet_balance_in_currency)
+                res['available_wallet_balance'] = wallet_balance_in_currency
+                res['available_wallet_balance_view'] = view_fmt(wallet_balance_in_currency)
+                res['wallet_currency'] = active_currency
+                res['max_wallet_redemption'] = max_wallet_redemption
+                res['max_wallet_redemption_view'] = view_fmt(max_wallet_redemption)
+                res['max_redeemable_amount'] = max_wallet_redemption
+                res['max_redeemable_amount_view'] = view_fmt(max_wallet_redemption)
+                res['is_wallet_redeem_applied'] = is_wallet_applied
+                res['wallet_amount_redeemed'] = applied_wallet_discount
+                res['wallet_amount_redeemed_view'] = view_fmt(applied_wallet_discount)
+                res['final_amount_to_paid'] = final_payable
+                res['final_amount_to_paid_view'] = view_fmt(final_payable)
+                res['remaining_wallet_balance'] = remaining_wallet_balance
+                res['remaining_wallet_balance_view'] = view_fmt(remaining_wallet_balance)
+
                 return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
             
             else:
