@@ -54,6 +54,7 @@ urlpatterns = [
     path('api/app_setting/',app_setting, name='app_setting'), #done
     path('api/admin_app_dynamic_setting/',admin_app_dynamic_setting, name='admin_app_dynamic_setting'), #done
     path('api/inquiry_setting/', inquiry_setting, name='inquiry_setting'),
+    path('api/inquiry_amount/', inquiry_amount, name='inquiry_amount'),
 
     # App Version Management & SemVer Force Update
     path('api/v1/app/version-check/', app_version_check, name='app_version_check_v1'),

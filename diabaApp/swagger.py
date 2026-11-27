@@ -105,6 +105,7 @@ PUBLIC_PATHS = {
     '/api/promocode_list/',
     '/api/app_setting/',
     '/api/inquiry_setting/',
+    '/api/inquiry_amount/',
     '/api/v1/app/version-check/',
     '/api/v1/app/version-check',
     '/api/app_version_check/',

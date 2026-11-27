@@ -19,8 +19,11 @@ from django.db import connection, transaction
 import uuid
 import json
 import openpyxl, requests
+from decimal import Decimal
+from django.utils import timezone
 
 from diabaApp.serializer import ProductInquirySerializer, VendorDelayNoteSerializer, VendorDetailExistsInDelayNote
+from diabaApp.apis.wallet_views import get_all_currency_rates, convert_to_usd, calculate_locked_values
 
 BASE_URL = settings.BASE_URL
 IMAGE_URL = settings.IMAGE_URL
@@ -78,6 +81,7 @@ def product_inquiry_form(request):
 
                 print(request.POST, 'product_data', flush=True)
                 inquiry_code = f"INQ-{uuid.uuid4().hex[:8].upper()}"
+                created_inquiry_ids = []
 
                 for index, product in enumerate(product_data):
                     product_name = product.get("product_name")
@@ -99,8 +103,9 @@ def product_inquiry_form(request):
                         product_name=product_name,
                         description=description,
                         quantity=quantity,
-                        created_at=datetime.now()
+                        created_at=timezone.now()
                     )
+                    created_inquiry_ids.append(product_inquiry.id)
 
                     # Look for images under various possible field keys: images_0, images_0[], images, images[]
                     images = (
@@ -116,9 +121,79 @@ def product_inquiry_form(request):
                             image=image
                         )
 
+                # AUTOMATIC WALLET TRANSFER:
+                # If is_free_inquiry is True: no record is added to wallet.
+                # If is_free_inquiry is False: automatic payable amount transferred to customer wallet with all currency values.
+                wallet_credit_info = None
+                if not is_free_inquiry and customer_id:
+                    try:
+                        payable_num = float(str(total_amount).replace(',', '').strip())
+                    except (ValueError, TypeError):
+                        payable_num = 0.0
+
+                    if payable_num > 0:
+                        customer = models.CustomerDetail.objects.filter(id=customer_id).first()
+                        if customer:
+                            now = timezone.now()
+                            rates = get_all_currency_rates()
+                            usd_amount = convert_to_usd(payable_num, currency, rates)
+                            locked_values = calculate_locked_values(usd_amount, rates)
+                            usd_decimal = Decimal(str(round(usd_amount, 2)))
+
+                            wallet, _ = models.CustomerWallet.objects.select_for_update().get_or_create(
+                                customer=customer,
+                                defaults={'balance': Decimal('0.00'), 'currency': 'USD', 'status': 'Active'}
+                            )
+
+                            balance_before = wallet.balance
+                            balance_after = balance_before + usd_decimal
+                            wallet.balance = balance_after
+                            wallet.save(update_fields=['balance', 'updated_at'])
+
+                            tx_ref = f"WTX-INQ-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+                            models.WalletTransaction.objects.create(
+                                wallet=wallet,
+                                customer=customer,
+                                transaction_type='Credit',
+                                amount=usd_decimal,
+                                currency='USD',
+                                balance_before=balance_before,
+                                balance_after=balance_after,
+                                source_type='Inquiry_Payment',
+                                source_id=inquiry_code,
+                                transaction_ref=tx_ref,
+                                description=f"Automatic inquiry transfer to wallet: {inquiry_code} ({payable_num} {currency})",
+                                rates_snapshot=rates,
+                                locked_values=locked_values,
+                                status='Success'
+                            )
+
+                            payment_transaction.is_wallet_transferred = True
+                            payment_transaction.wallet_transferred_at = now
+                            payment_transaction.save(update_fields=['is_wallet_transferred', 'wallet_transferred_at'])
+
+                            models.ProductInquiry.objects.filter(id__in=created_inquiry_ids).update(
+                                is_wallet_transferred=True,
+                                wallet_transferred_at=now
+                            )
+
+                            wallet_credit_info = {
+                                'transaction_ref': tx_ref,
+                                'credited_amount': payable_num,
+                                'currency': currency,
+                                'credited_usd': float(usd_decimal),
+                                'balance_after_usd': float(balance_after),
+                                'locked_values': locked_values
+                            }
+
             res = {
-                'message': 'Inquiry Submitted Successfully'
+                'message': 'Inquiry Submitted Successfully',
+                'inquiry_code': inquiry_code,
+                'is_free_inquiry': is_free_inquiry,
+                'wallet_credited': bool(wallet_credit_info),
             }
+            if wallet_credit_info:
+                res['wallet_data'] = wallet_credit_info
             return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
 
         except Exception as e:
@@ -391,4 +466,75 @@ def vendor_list_with_delay_note(request):
             'data':vendor_list_serializer
         }
         return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status = 200)
+
+
+@csrf_exempt
+def inquiry_amount(request):
+    """
+    App-side endpoint to fetch the current inquiry price amount and multi-currency values.
+    Endpoint: /api/inquiry_amount/
+    
+    Supports GET and POST.
+    Optional parameters:
+      - currency: user's requested display currency (e.g. 'XOF', 'USD', 'EUR', 'CNY')
+    """
+    if request.method not in ["GET", "POST"]:
+        return HttpResponse(
+            JSONRenderer().render({'status': False, 'message': 'Method not allowed'}),
+            content_type='application/json',
+            status=405
+        )
+
+    python_data = {}
+    if request.body:
+        try:
+            python_data = JSONParser().parse(io.BytesIO(request.body))
+        except Exception:
+            pass
+
+    req_currency = python_data.get('currency') or request.GET.get('currency')
+
+    setting = models.InquirySetting.objects.all().first()
+    if not setting:
+        setting = models.InquirySetting.objects.create(
+            inquiry_price=0.00,
+            inquiry_currency='XOF',
+            free_inquiry=False
+        )
+
+    is_free = bool(setting.free_inquiry)
+    base_price = float(setting.inquiry_price or 0.0)
+    base_currency = (setting.inquiry_currency or 'XOF').upper().strip()
+
+    rates = get_all_currency_rates()
+
+    if is_free or base_price <= 0:
+        usd_amount = 0.0
+        all_conversions = {curr: 0.0 for curr in rates}
+        display_amount = 0.0
+        target_currency = (req_currency or base_currency).upper().strip()
+    else:
+        usd_amount = convert_to_usd(base_price, base_currency, rates)
+        all_conversions = calculate_locked_values(usd_amount, rates)
+        target_currency = (req_currency or base_currency).upper().strip()
+        display_amount = all_conversions.get(target_currency, base_price)
+
+    data = {
+        'is_free_inquiry': is_free,
+        'free_inquiry': is_free,
+        'inquiry_price': base_price,
+        'inquiry_currency': base_currency,
+        'amount': display_amount,
+        'currency': target_currency,
+        'all_currencies': all_conversions,
+        'rates': rates
+    }
+
+    res = {
+        'status': True,
+        'message': 'Inquiry amount retrieved successfully',
+        'data': data
+    }
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
 
