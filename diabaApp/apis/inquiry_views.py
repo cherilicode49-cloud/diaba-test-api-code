@@ -44,28 +44,46 @@ def product_inquiry_form(request):
 
             # Dynamic setting check for inquiry price & free_inquiry toggle
             setting = models.InquirySetting.objects.all().first()
-            is_free_inquiry = setting.free_inquiry if setting else False
             configured_price = float(setting.inquiry_price) if (setting and setting.inquiry_price is not None) else 0.0
-            configured_currency = setting.inquiry_currency if (setting and setting.inquiry_currency) else "XOF"
+            configured_currency = (setting.inquiry_currency if (setting and setting.inquiry_currency) else "XOF").upper().strip()
 
-            raw_amount = request.POST.get("amount")
+            # Respect is_free_inquiry from request.POST if provided, else fallback to setting
+            raw_is_free = request.POST.get("is_free_inquiry")
+            if raw_is_free is not None:
+                if isinstance(raw_is_free, str):
+                    is_free_inquiry = raw_is_free.strip().lower() in ['true', '1', 'yes']
+                else:
+                    is_free_inquiry = bool(raw_is_free)
+            else:
+                is_free_inquiry = setting.free_inquiry if setting else False
+
+            raw_amount = request.POST.get("amount") or request.POST.get("total_amount")
             bictorys_id = request.POST.get("bictorys_transaction_id")
             payment_ref = request.POST.get("payment_reference")
 
+            # Extract currency parameter sent by frontend
+            raw_currency = (
+                request.POST.get("currency") or 
+                request.POST.get("currency_code") or 
+                request.POST.get("currency_name")
+            )
+            if not raw_currency and product_data and isinstance(product_data, list) and len(product_data) > 0:
+                raw_currency = product_data[0].get("currency") or product_data[0].get("currency_code")
+
+            currency = (raw_currency or configured_currency or "XOF").upper().strip()
+
             # Determine payment parameters
-            if is_free_inquiry or configured_price <= 0:
+            if is_free_inquiry:
                 payment_type = "Free"
                 payment_id = bictorys_id or f"FREE-{uuid.uuid4().hex[:10].upper()}"
                 reference_id = payment_ref or f"FREE-REF-{uuid.uuid4().hex[:8].upper()}"
                 total_amount = "0"
-                currency = configured_currency
                 status = "Success"
             else:
                 payment_type = request.POST.get("payment_type", "Bictorys") or "Bictorys"
                 payment_id = bictorys_id or f"TX-{uuid.uuid4().hex[:10].upper()}"
                 reference_id = payment_ref or f"REF-{uuid.uuid4().hex[:8].upper()}"
-                total_amount = raw_amount if raw_amount is not None else str(configured_price)
-                currency = request.POST.get("currency", configured_currency) or configured_currency
+                total_amount = str(raw_amount) if raw_amount is not None else str(configured_price)
                 status = "Success"
 
             with transaction.atomic():
@@ -77,6 +95,7 @@ def product_inquiry_form(request):
                     total_amount=total_amount,
                     currency=currency,
                     status=status,
+                    created_at=timezone.now().strftime('%Y-%m-%d %H:%M:%S')
                 )
 
                 print(request.POST, 'product_data', flush=True)
