@@ -101,6 +101,12 @@ admin.site.register(models.PromocodeCommissionDetail)
 admin.site.register(models.CargoDetail)
 admin.site.register(models.ProductReview)
 admin.site.register(models.AppDynamicSetting)
+
+class InquirySettingAdmin(admin.ModelAdmin):
+    list_display = ('id', 'inquiry_price', 'inquiry_currency', 'free_inquiry', 'updated_at')
+    list_editable = ('inquiry_price', 'inquiry_currency', 'free_inquiry')
+
+admin.site.register(models.InquirySetting, InquirySettingAdmin)
 admin.site.register(models.ProductCountry)
 admin.site.register(models.PaymentCargoSlider)
 admin.site.register(models.ImportantNote)
@@ -122,3 +128,5 @@ admin.site.register(models.ContainerTerms)
 admin.site.register(models.ContainerBookingFee)
 admin.site.register(models.UserActivity)
 admin.site.register(models.AppVersionSetting)
+admin.site.register(models.CustomerWallet)
+admin.site.register(models.WalletTransaction)

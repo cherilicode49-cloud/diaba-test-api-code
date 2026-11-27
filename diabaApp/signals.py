@@ -9,9 +9,7 @@ from django.db import transaction
 
 @receiver(post_save, sender=models.ProductDetail)
 def product_updated(sender, instance, **kwargs):
-    if instance.product_added_from in ['yuwi_go', 'yiwu_go'] or instance.status in ['yuwi_go', 'yiwu_go'] or getattr(instance, '_skip_faiss_refresh', False):
-        return
-
-    transaction.on_commit(
-        lambda: async_refresh_faiss()
-    )
+    # Full database table scan FAISS rebuild on every single product save is intentionally disabled.
+    # Rebuilding 150k+ products in Django dev/WSGI server freezes the Python process and causes Broken Pipe timeouts.
+    # New image vectors are added incrementally via add_product_vectors_to_faiss() in the background vector worker.
+    return

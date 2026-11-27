@@ -178,6 +178,33 @@ def refresh_faiss_index():
         build_faiss_index()
 
 
+def add_product_vectors_to_faiss(product_id, vectors_list):
+    """
+    Incrementally appends new vectors to in-memory FAISS index without full database rebuild.
+    Takes ~1ms and does not block the WSGI server or other requests.
+    """
+    global FAISS_INDEX, PRODUCT_IDS
+    if FAISS_INDEX is None or PRODUCT_IDS is None or not vectors_list:
+        return
+    with FAISS_LOCK:
+        try:
+            valid_vecs = []
+            for v in vectors_list:
+                if v is not None:
+                    arr = np.array(v, dtype=np.float32).flatten()
+                    if arr.shape[0] == 512:
+                        faiss.normalize_L2(arr.reshape(1, -1))
+                        valid_vecs.append(arr)
+            if valid_vecs:
+                vecs_np = np.array(valid_vecs, dtype=np.float32)
+                FAISS_INDEX.add(vecs_np)
+                new_ids = np.array([product_id] * len(valid_vecs))
+                PRODUCT_IDS = np.concatenate([PRODUCT_IDS, new_ids])
+                print(f"FAISS: incrementally added {len(valid_vecs)} vector(s) for product {product_id}")
+        except Exception as e:
+            print(f"Error incrementally adding vector to FAISS index: {e}")
+
+
 def async_refresh_faiss():
 
     global FAISS_REBUILDING

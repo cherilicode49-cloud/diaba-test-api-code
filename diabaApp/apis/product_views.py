@@ -37,6 +37,7 @@ from diabaApp.utils import track_user_activity
 
 from django.contrib.postgres.search import TrigramSimilarity
 import os 
+import threading 
 from django.db.models import Q, F, Count, Case, Sum, When, IntegerField, Value, OuterRef, Subquery, ExpressionWrapper, CharField, FloatField
 from django.contrib.postgres.search import TrigramWordSimilarity
 from openpyxl.styles import PatternFill
@@ -105,14 +106,138 @@ def extract_features_from_url(url):
         return None
 
 
+def is_uploaded_file(val):
+    """
+    Checks if a value is a real, non-empty uploaded file object (from request.FILES)
+    rather than a string URL, None, empty string, 'null', 'undefined', or a 0-byte empty file input.
+    """
+    if val is None or val in ['', 'null', 'None', 'undefined']:
+        return False
+    if isinstance(val, str):
+        return False
+    if not (hasattr(val, 'read') or hasattr(val, 'chunks')):
+        return False
+    # CRITICAL: An actual uploaded file MUST have a non-empty filename and size > 0!
+    size = getattr(val, 'size', None)
+    if size is not None and size <= 0:
+        return False
+    name = getattr(val, 'name', None)
+    if not name or str(name).strip() in ['', 'null', 'None', 'undefined']:
+        return False
+    return True
+
+
+def convert_avif_to_jpeg_if_needed(file_obj):
+    """
+    Converts an uploaded AVIF image to JPEG format if applicable.
+    Resets stream pointer safely for subsequent saving.
+    """
+    if not is_uploaded_file(file_obj):
+        return file_obj
+    try:
+        if hasattr(file_obj, 'seek'):
+            file_obj.seek(0)
+        img = Image.open(file_obj)
+        if getattr(img, 'format', None) == "AVIF":
+            if img.mode in ("RGBA", "LA"):
+                img = img.convert("RGB")
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=90)
+            buffer.seek(0)
+            base_name, ext = os.path.splitext(getattr(file_obj, 'name', 'image'))
+            jpg_name = base_name + ".jpg"
+            return ContentFile(buffer.read(), name=jpg_name)
+        elif hasattr(file_obj, 'seek'):
+            file_obj.seek(0)
+    except Exception:
+        if hasattr(file_obj, 'seek'):
+            try:
+                file_obj.seek(0)
+            except Exception:
+                pass
+    return file_obj
+
+
+def async_generate_product_image_vectors(product_id, image_indices=None):
+    """
+    Asynchronously extracts CLIP image vectors for product images in a background daemon thread.
+    Prevents blocking HTTP responses and avoids request timeouts on frontend clients.
+    """
+    def _worker():
+        try:
+            # Refresh thread-local DB connection
+            connection.close()
+            from diabaApp import models
+            product = models.ProductDetail.objects.filter(id=product_id).first()
+            if not product:
+                return
+
+            indices = image_indices if image_indices else list(range(1, 9))
+            updated_fields = []
+            extracted_vectors = []
+
+            for idx in indices:
+                img_attr = f'product_image_{idx}'
+                vec_attr = f'product_image_{idx}_vector'
+                img_file = getattr(product, img_attr, None)
+
+                if not img_file or str(img_file) in ['', 'null', 'None']:
+                    continue
+
+                feat = None
+                # If local file exists, process directly from disk (fastest)
+                try:
+                    if hasattr(img_file, 'path') and os.path.exists(img_file.path):
+                        feat = extract_features_from_file(img_file.path)
+                except Exception:
+                    feat = None
+
+                # Otherwise extract via URL (e.g. S3 storage)
+                if feat is None:
+                    try:
+                        url = img_file.url
+                        if url.startswith('/'):
+                            site_url = getattr(settings, 'SITE_URL', 'http://127.0.0.1:8000')
+                            url = site_url.rstrip('/') + url
+                        feat = extract_features_from_url(url)
+                    except Exception as err:
+                        feat = None
+
+                if feat is not None:
+                    try:
+                        if hasattr(feat, 'size') and feat.size > 0:
+                            setattr(product, vec_attr, feat.tolist())
+                            updated_fields.append(vec_attr)
+                            extracted_vectors.append(feat)
+                    except Exception as err:
+                        pass
+
+            if updated_fields:
+                product._skip_faiss_refresh = True
+                product.save(update_fields=updated_fields)
+                if extracted_vectors:
+                    try:
+                        from diabaApp.faiss_store import add_product_vectors_to_faiss
+                        add_product_vectors_to_faiss(product.id, extracted_vectors)
+                    except Exception as faiss_err:
+                        print(f"Error appending vectors to FAISS for product {product_id}: {faiss_err}")
+        except Exception as ex:
+            print(f"async_generate_product_image_vectors exception for product {product_id}: {ex}")
+        finally:
+            connection.close()
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"vector_worker_prod_{product_id}")
+    t.start()
+
+
+
 @csrf_exempt
 def product_model_variant_create(request):
-    python_data={}
-    for i,j in request.FILES.items():
-        python_data.update({i:j})
-    
-    for i,j in request.POST.items():
-        python_data.update({i:j})
+    python_data = {}
+    for i, j in request.POST.items():
+        python_data.update({i: j})
+    for i, j in request.FILES.items():
+        python_data.update({i: j})
 
     # print("python_data--=-=-model_name_french-=-=-=>",python_data)
 
@@ -134,14 +259,15 @@ def product_model_variant_create(request):
     min_order_quantity = python_data.get('min_order_quantity')
     max_order_quantity = python_data.get('max_order_quantity')
     quantity = python_data.get('quantity')
-    product_image_1 = python_data.get('product_image_1')
-    product_image_2 = python_data.get('product_image_2')
-    product_image_3 = python_data.get('product_image_3')
-    product_image_4 = python_data.get('product_image_4')
-    product_image_5 = python_data.get('product_image_5')
-    product_image_6 = python_data.get('product_image_6')
-    product_image_7 = python_data.get('product_image_7')
-    product_image_8 = python_data.get('product_image_8')
+    product_image_1 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_1')) if is_uploaded_file(python_data.get('product_image_1')) else None
+    product_image_2 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_2')) if is_uploaded_file(python_data.get('product_image_2')) else None
+    product_image_3 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_3')) if is_uploaded_file(python_data.get('product_image_3')) else None
+    product_image_4 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_4')) if is_uploaded_file(python_data.get('product_image_4')) else None
+    product_image_5 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_5')) if is_uploaded_file(python_data.get('product_image_5')) else None
+    product_image_6 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_6')) if is_uploaded_file(python_data.get('product_image_6')) else None
+    product_image_7 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_7')) if is_uploaded_file(python_data.get('product_image_7')) else None
+    product_image_8 = convert_avif_to_jpeg_if_needed(python_data.get('product_image_8')) if is_uploaded_file(python_data.get('product_image_8')) else None
+    product_video = python_data.get('product_video') if is_uploaded_file(python_data.get('product_video')) else None
     
     delay_days_air = python_data.get('delay_days_air',None)
     delay_days_ship = python_data.get('delay_days_ship',None)
@@ -158,112 +284,6 @@ def product_model_variant_create(request):
 
     if delay_days_express in [None,'','null']:
         delay_days_express = None
-    
-    
-    if product_image_1 != None and product_image_1 != 'null' and product_image_1 != '':
-        img = Image.open(product_image_1)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_1.name)
-            jpg_name = base_name + ".jpg"
-            product_image_1 = ContentFile(buffer.read(), name=jpg_name)
-
-    if product_image_2 != None and product_image_2 != 'null' and product_image_2 != '':
-        img = Image.open(product_image_2)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-                
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_2.name)
-            jpg_name = base_name + ".jpg"
-            product_image_2 = ContentFile(buffer.read(), name=jpg_name)
-
-    if product_image_3 != None and product_image_3 != 'null' and product_image_3 != '':
-        img = Image.open(product_image_3)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-                
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_3.name)
-            jpg_name = base_name + ".jpg"
-            product_image_3 = ContentFile(buffer.read(), name=jpg_name)
-
-    if product_image_4 != None and product_image_4 != 'null' and product_image_4 != '':
-        img = Image.open(product_image_4)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-                
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_4.name)
-            jpg_name = base_name + ".jpg"
-            product_image_4 = ContentFile(buffer.read(), name=jpg_name)
-
-    if product_image_5 != None and product_image_5 != 'null' and product_image_5 != '':
-        img = Image.open(product_image_5)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-                
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_5.name)
-            jpg_name = base_name + ".jpg"
-            product_image_5 = ContentFile(buffer.read(), name=jpg_name)
-
-    if product_image_6 != None and product_image_6 != 'null' and product_image_6 != '':
-        img = Image.open(product_image_6)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-                
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_6.name)
-            jpg_name = base_name + ".jpg"
-            product_image_6 = ContentFile(buffer.read(), name=jpg_name)
-
-    if product_image_7 != None and product_image_7 != 'null' and product_image_7 != '':
-        img = Image.open(product_image_7)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-                
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_7.name)
-            jpg_name = base_name + ".jpg"
-            product_image_7 = ContentFile(buffer.read(), name=jpg_name)
-
-    if product_image_8 != None and product_image_8 != 'null' and product_image_8 != '':
-        img = Image.open(product_image_8)
-        if img.format == "AVIF":        
-            if img.mode in ("RGBA", "LA"):
-                img = img.convert("RGB")
-                
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=90)
-            buffer.seek(0)
-            base_name, ext = os.path.splitext(product_image_8.name)
-            jpg_name = base_name + ".jpg"
-            product_image_8 = ContentFile(buffer.read(), name=jpg_name)
-
 
     price = python_data.get('price')
     discount = python_data.get('discount')
@@ -286,6 +306,7 @@ def product_model_variant_create(request):
     available_country = python_data.get('available_country', None)
     tag = python_data.get('tag', None)
     is_inquiry = python_data.get('is_inquiry', None)
+    is_active = python_data.get('status', None)
     
     
 
@@ -366,7 +387,7 @@ def product_model_variant_create(request):
         # price = price,
         discount = discount,
         final_price = final_price,
-        status = 'Inactive',
+        status = is_active,
         product_verification = product_verification,
         refpro = refpro,
         reuser = reuser,
@@ -394,92 +415,13 @@ def product_model_variant_create(request):
 
     product_id = product.id 
 
-
-    get_product_image_1 = product.product_image_1
-    get_product_image_2 = product.product_image_2
-    get_product_image_3 = product.product_image_3
-    get_product_image_4 = product.product_image_4
-    get_product_image_5 = product.product_image_5
-    get_product_image_6 = product.product_image_6
-    get_product_image_7 = product.product_image_7
-    get_product_image_8 = product.product_image_8
-
-    domain_path = ""
-
-
-    if get_product_image_1 != None and get_product_image_1 != 'null' and get_product_image_1 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_1.url)
-        try:
-            if feat.size > 0:
-                product.product_image_1_vector = feat.tolist()
-                product.save()
-        except:
-            pass
-    
-    if get_product_image_2 != None and get_product_image_2 != 'null' and get_product_image_2 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_2.url)
-        try:
-            if feat.size > 0:
-                product.product_image_2_vector = feat.tolist()
-                product.save()
-        except:
-            pass
-
-    if get_product_image_3 != None and get_product_image_3 != 'null' and get_product_image_3 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_3.url)
-        try:
-            if feat.size > 0:
-                product.product_image_3_vector = feat.tolist()
-                product.save()
-        except:
-            pass
-
-    if get_product_image_4 != None and get_product_image_4 != 'null' and get_product_image_4 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_4.url)
-        try:
-            if feat.size > 0:
-                product.product_image_4_vector = feat.tolist()
-                product.save()
-        
-        except:
-            pass
-
-
-    if get_product_image_5 != None and get_product_image_5 != 'null' and get_product_image_5 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_5.url)
-        try:
-            if feat.size > 0:
-                product.product_image_5_vector = feat.tolist()
-                product.save()
-        except:
-            pass
-
-    if get_product_image_6 != None and get_product_image_6 != 'null' and get_product_image_6 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_6.url)
-        try:
-            if feat.size > 0:
-                product.product_image_6_vector = feat.tolist()
-                product.save()
-        except:
-            pass
-
-    if get_product_image_7 != None and get_product_image_7 != 'null' and get_product_image_7 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_7.url)
-        try:
-            if feat.size > 0:
-                product.product_image_7_vector = feat.tolist()
-                product.save()
-        except:
-            pass
-
-    if get_product_image_8 != None and get_product_image_8 != 'null' and get_product_image_8 != '':
-        feat = extract_features_from_url(domain_path+get_product_image_8.url)
-        try:
-            if feat.size > 0:
-                product.product_image_8_vector = feat.tolist()
-                product.save()
-        except:
-            pass
+    # Asynchronously extract image feature vectors in background to prevent HTTP blocking
+    uploaded_image_slots = [
+        idx for idx in range(1, 9)
+        if getattr(product, f'product_image_{idx}', None) and str(getattr(product, f'product_image_{idx}', '')) not in ['', 'null', 'None']
+    ]
+    if uploaded_image_slots:
+        async_generate_product_image_vectors(product_id, uploaded_image_slots)
 
 
     for specification in other_specification:
@@ -503,20 +445,7 @@ def product_model_variant_create(request):
         if python_data.get(model_name):
             model_name = (python_data.get(model_name)).strip()
             model_name_french = (python_data.get(model_name_french)).strip()
-            model_image = python_data.get(f'models[{i}][image]')
-            
-            if model_image != None and model_image != 'null' and model_image != '':
-                img = Image.open(model_image)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(model_image.name)
-                    jpg_name = base_name + ".jpg"
-                    model_image = ContentFile(buffer.read(), name=jpg_name)
+            model_image = convert_avif_to_jpeg_if_needed(python_data.get(f'models[{i}][image]')) if is_uploaded_file(python_data.get(f'models[{i}][image]')) else None
 
             create_model = models.ProductModel.objects.create(
                 product_id = product_id,
@@ -533,7 +462,7 @@ def product_model_variant_create(request):
                 if python_data.get(variant_name):
                     variant_name = (python_data.get(variant_name)).strip()
                     variant_name_french = (python_data.get(variant_name_french)).strip()
-                    variant_image = python_data.get(f'models[{i}][variants][{j}][image]')
+                    variant_image = convert_avif_to_jpeg_if_needed(python_data.get(f'models[{i}][variants][{j}][image]')) if is_uploaded_file(python_data.get(f'models[{i}][variants][{j}][image]')) else None
                     variant_price = python_data.get(f'models[{i}][variants][{j}][price]')
                     price_currency = python_data.get('price_currency') or python_data.get('currency')
                     if price_currency == 'XOF' and variant_price not in [None, '', 'null']:
@@ -547,19 +476,6 @@ def product_model_variant_create(request):
                         list_price.append(float(variant_price))
                     except Exception:
                         list_price.append(variant_price)
-
-                    if variant_image != None and model_image != 'null' and variant_image != '':
-                        img = Image.open(variant_image)
-                        if img.format == "AVIF":        
-                            if img.mode in ("RGBA", "LA"):
-                                img = img.convert("RGB")
-                                
-                            buffer = BytesIO()
-                            img.save(buffer, format="JPEG", quality=90)
-                            buffer.seek(0)
-                            base_name, ext = os.path.splitext(variant_image.name)
-                            jpg_name = base_name + ".jpg"
-                            variant_image = ContentFile(buffer.read(), name=jpg_name)
 
                     v_len = str(python_data.get(f'models[{i}][variants][{j}][length]') or length or '')[:50] or None
                     v_hei = str(python_data.get(f'models[{i}][variants][{j}][height]') or height or '')[:50] or None
@@ -615,10 +531,15 @@ def product_model_variant_create(request):
             break    
 
 
-    smallest_price = min(list_price)
-    product_update = models.ProductDetail.objects.get(id = product_id)
-    product_update.price = smallest_price
-    product_update.save()
+    if 'list_price' in locals() and list_price:
+        try:
+            smallest_price = min(list_price)
+            product_update = models.ProductDetail.objects.get(id = product_id)
+            product_update.price = smallest_price
+            product_update._skip_faiss_refresh = True
+            product_update.save(update_fields=['price'])
+        except Exception:
+            pass
 
     res = {
         'message':'Project create successfully.'        
@@ -632,404 +553,223 @@ def product_model_variant_create(request):
 @csrf_exempt
 def product_model_variant_update(request):
     if request.method == 'POST':
-        python_data={}
-        for i,j in request.FILES.items():
-            python_data.update({i:j})
-        
-        for i,j in request.POST.items():
-            python_data.update({i:j})
+        python_data = {}
+        for i, j in request.POST.items():
+            python_data.update({i: j})
+        for i, j in request.FILES.items():
+            python_data.update({i: j})
 
         id = python_data.get('id')
-        product_name = (python_data.get('product_name')).strip()
-        product_name_french = (python_data.get('product_name_french')).strip()
-        description_french = python_data.get('description_french')
-        product_code = python_data.get('product_code', None)
-        category = python_data.get('category')
-        subcategory = python_data.get('subcategory')
-        # super_subcategory = python_data.get('super_subcategory')
-        description = python_data.get('description')
-        unit_of_measure = python_data.get('unit_of_measure')
-        material = python_data.get('material')
-        length = python_data.get('length')
-        height = python_data.get('height')
-        width = python_data.get('width')
-        weight = python_data.get('weight')
-        color = python_data.get('color')
-        min_order_quantity = python_data.get('min_order_quantity')
-        max_order_quantity = python_data.get('max_order_quantity')
-        quantity = python_data.get('quantity')
-        product_image_1 = python_data.get('product_image_1')
-        product_image_2 = python_data.get('product_image_2')
-        product_image_3 = python_data.get('product_image_3')
-        product_image_4 = python_data.get('product_image_4')
-        product_image_5 = python_data.get('product_image_5')
-        product_image_6 = python_data.get('product_image_6')
-        product_image_7 = python_data.get('product_image_7')
-        product_image_8 = python_data.get('product_image_8')
-        product_video = python_data.get('product_video')
-        
-        delay_days_air = python_data.get('delay_days_air')
-        delay_days_ship = python_data.get('delay_days_ship')
-        delay_days_express = python_data.get('delay_days_express')
 
-        if delay_days_air in [None,'','null']:
-            delay_days_air = None
+        def clean_val(key):
+            if key not in python_data:
+                return None
+            val = python_data.get(key)
+            if val is None or val in ['null', 'undefined', 'None']:
+                return None
+            if isinstance(val, str) and val.strip() in ['', 'null', 'undefined', 'None']:
+                return None
+            return val
 
-        if delay_days_ship in [None,'','null']:
-            delay_days_ship = None
-
-        if delay_days_express in [None,'','null']:
-            delay_days_express = None
-
-        available_country = python_data.get('available_country')
-        tag = python_data.get('tag')
-        
-        if available_country not in [None,"","null"]:
+        other_spec_raw = python_data.get('other_specification')
+        other_specification = None
+        if other_spec_raw not in [None, '', 'null', 'undefined']:
             try:
-                available_country = [int(x) for x in available_country.split(',')]
-            except Exception as e:
+                other_specification = json.loads(other_spec_raw) if isinstance(other_spec_raw, str) else other_spec_raw
+            except Exception:
+                other_specification = []
 
-                available_country = json.loads(available_country)
+        if models.ProductDetail.objects.filter(id=id).exists():
+            get_product = models.ProductDetail.objects.get(id=id)
 
-        if tag not in [None,"","null"]:
-            try:
-                tag = [int(x) for x in tag.split(',')]
-            except Exception as e:
+            # Only update product fields if explicitly provided in request!
+            # If omitted, null, or empty string -> PRESERVE existing database value!
+            if clean_val('product_name') is not None:
+                get_product.product_name = str(clean_val('product_name')).strip()
 
-                tag = json.loads(tag)
+            if clean_val('product_name_french') is not None:
+                get_product.product_name_french = str(clean_val('product_name_french')).strip()
 
-        if product_image_1 != None and product_image_1 != 'null' and product_image_1 != '':
-            try:
-                img = Image.open(product_image_1)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
+            if clean_val('product_code') is not None:
+                get_product.product_code = clean_val('product_code')
 
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_1.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_1 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
-            
-        if product_image_2 != None and product_image_2 != 'null' and product_image_2 != '':
-            try:
-                img = Image.open(product_image_2)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_2.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_2 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
-            
-        if product_image_3 != None and product_image_3 != 'null' and product_image_3 != '':
-            try:
-                img = Image.open(product_image_3)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_3.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_3 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
-            
-        if product_image_4 != None and product_image_4 != 'null' and product_image_4 != '':
-            try:
-                img = Image.open(product_image_4)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_4.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_4 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
-            
-        if product_image_5 != None and product_image_5 != 'null' and product_image_5 != '':
-            try:
-                img = Image.open(product_image_5)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_5.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_5 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
-            
-        if product_image_6 != None and product_image_6 != 'null' and product_image_6 != '':
-            try:
-                img = Image.open(product_image_6)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_6.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_6 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
-            
-        if product_image_7 != None and product_image_7 != 'null' and product_image_7 != '':
-            try:
-                img = Image.open(product_image_7)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_7.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_7 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
-            
-        if product_image_8 != None and product_image_8 != 'null' and product_image_8 != '':
-            try:
-                img = Image.open(product_image_8)
-                if img.format == "AVIF":        
-                    if img.mode in ("RGBA", "LA"):
-                        img = img.convert("RGB")
-                        
-                    buffer = BytesIO()
-                    img.save(buffer, format="JPEG", quality=90)
-                    buffer.seek(0)
-                    base_name, ext = os.path.splitext(product_image_8.name)
-                    jpg_name = base_name + ".jpg"
-                    product_image_8 = ContentFile(buffer.read(), name=jpg_name)
-            except:
-                pass
+            if clean_val('category') is not None:
+                get_product.category_id = clean_val('category')
 
- 
-        country_of_origin = python_data.get('country_of_origin')
-        
-        price = python_data.get('price')
-        discount = python_data.get('discount')
-        final_price = python_data.get('final_price')
-        vendor = python_data.get('vendor')
-        product_verification = python_data.get('product_verification')
-        refpro = python_data.get('refpro')
-        reuser = python_data.get('reuser')
+            if clean_val('subcategory') is not None:
+                get_product.subcategory_id = clean_val('subcategory')
 
-        carton_length = python_data.get('carton_length')
-        carton_width = python_data.get('carton_width')
-        carton_height = python_data.get('carton_height')
-        carton_weight = python_data.get('carton_weight')
-        shipping_via = python_data.get('shipping_via')
-        status = python_data.get('status')
-        product_type = python_data.get('product_type')
-        product_packaging = python_data.get('product_packaging')
-        product_packaging_value = python_data.get('product_packaging_value')
-        is_inquiry = python_data.get('is_inquiry')
-        
-        other_specification = json.loads(python_data.get('other_specification'))
+            if clean_val('description') is not None:
+                get_product.description = clean_val('description')
 
-        if vendor in [None,'','null']:
-            vendor = None
-        # if super_subcategory in [None,'','null']:
-        #     super_subcategory = None
+            if clean_val('description_french') is not None:
+                get_product.description_french = clean_val('description_french')
 
-        if models.ProductDetail.objects.filter(id = id).exists():
-            get_product = models.ProductDetail.objects.get(id = id)
-            get_product.product_name = product_name
-            get_product.product_name_french = product_name_french
-            
-            get_product.product_code = product_code
-            # get_product.vendor_id = vendor
-            get_product.category_id = category
-            get_product.subcategory_id = subcategory
-            # get_product.super_subcategory_id = super_subcategory
-            get_product.description = description
-            get_product.description_french = description_french
-            get_product.unit_of_measure = unit_of_measure
-            get_product.material = material
-            get_product.length = length
-            get_product.height = height
-            get_product.width = width
-            get_product.weight = weight
-            get_product.color = color
-            get_product.min_order_quantity = min_order_quantity
-            get_product.max_order_quantity = max_order_quantity
-            get_product.quantity = quantity
-            get_product.refpro = refpro
-            get_product.reuser = reuser
-            get_product.country_of_origin_id = country_of_origin
+            if clean_val('unit_of_measure') is not None:
+                get_product.unit_of_measure = clean_val('unit_of_measure')
 
-            get_product.carton_length = length
-            get_product.carton_width = width
-            get_product.carton_height = height
-            get_product.carton_weight = weight
-            
-            if not isinstance(product_image_1, str):
-                get_product.product_image_1 = product_image_1
-            if not isinstance(product_image_2, str):
-                get_product.product_image_2 = product_image_2
-            if not isinstance(product_image_3, str):
-                get_product.product_image_3 = product_image_3
-            if not isinstance(product_image_4, str):
-                get_product.product_image_4 = product_image_4
-            if not isinstance(product_image_5, str):
-                get_product.product_image_5 = product_image_5
-            if not isinstance(product_image_6, str):
-                get_product.product_image_6 = product_image_6
-            if not isinstance(product_image_7, str):
-                get_product.product_image_7 = product_image_7
-            if not isinstance(product_image_8, str):
-                get_product.product_image_8 = product_image_8
-            if not isinstance(product_video, str):
+            if clean_val('material') is not None:
+                get_product.material = clean_val('material')
+
+            if clean_val('color') is not None:
+                get_product.color = clean_val('color')
+
+            if clean_val('length') is not None:
+                get_product.length = clean_val('length')
+
+            if clean_val('height') is not None:
+                get_product.height = clean_val('height')
+
+            if clean_val('width') is not None:
+                get_product.width = clean_val('width')
+
+            if clean_val('weight') is not None:
+                get_product.weight = clean_val('weight')
+
+            if clean_val('carton_length') is not None:
+                get_product.carton_length = clean_val('carton_length')
+
+            if clean_val('carton_width') is not None:
+                get_product.carton_width = clean_val('carton_width')
+
+            if clean_val('carton_height') is not None:
+                get_product.carton_height = clean_val('carton_height')
+
+            if clean_val('carton_weight') is not None:
+                get_product.carton_weight = clean_val('carton_weight')
+
+            if clean_val('min_order_quantity') is not None:
+                get_product.min_order_quantity = clean_val('min_order_quantity')
+
+            if clean_val('max_order_quantity') is not None:
+                get_product.max_order_quantity = clean_val('max_order_quantity')
+
+            if clean_val('quantity') is not None:
+                get_product.quantity = clean_val('quantity')
+
+            if clean_val('available_quantity') is not None:
+                get_product.available_quantity = clean_val('available_quantity')
+
+            if clean_val('price') is not None:
+                get_product.price = clean_val('price')
+
+            if clean_val('discount') is not None:
+                get_product.discount = clean_val('discount')
+
+            if clean_val('final_price') is not None:
+                get_product.final_price = clean_val('final_price')
+
+            if clean_val('country_of_origin') is not None:
+                get_product.country_of_origin_id = clean_val('country_of_origin')
+
+            if clean_val('vendor') is not None:
+                get_product.vendor_id = clean_val('vendor')
+
+            if clean_val('refpro') is not None:
+                get_product.refpro = clean_val('refpro')
+
+            if clean_val('reuser') is not None:
+                get_product.reuser = clean_val('reuser')
+
+            if clean_val('product_verification') is not None:
+                get_product.product_verification = clean_val('product_verification')
+
+            if clean_val('shipping_via') is not None:
+                get_product.shipping_via = clean_val('shipping_via')
+
+            if clean_val('delay_days_air') is not None:
+                get_product.delay_days_air = clean_val('delay_days_air')
+
+            if clean_val('delay_days_ship') is not None:
+                get_product.delay_days_ship = clean_val('delay_days_ship')
+
+            if clean_val('delay_days_express') is not None:
+                get_product.delay_days_express = clean_val('delay_days_express')
+
+            if clean_val('product_type') is not None:
+                get_product.product_type_id = clean_val('product_type')
+
+            if clean_val('product_packaging') is not None:
+                get_product.product_packaging_id = clean_val('product_packaging')
+
+            if clean_val('product_packaging_value') is not None:
+                get_product.product_packaging_value = clean_val('product_packaging_value')
+
+            if clean_val('status') is not None:
+                get_product.status = clean_val('status')
+
+            if clean_val('is_inquiry') is not None:
+                get_product.is_inquiry = clean_val('is_inquiry')
+
+            # SAFE PRODUCT IMAGE ASSIGNMENT:
+            # Only update product image if a real, non-empty uploaded file is provided!
+            # If omitted, null, empty string, or existing URL string: DO NOT TOUCH existing image!
+            updated_image_slots = []
+            for idx in range(1, 9):
+                p_img = python_data.get(f'product_image_{idx}')
+                if is_uploaded_file(p_img):
+                    p_img = convert_avif_to_jpeg_if_needed(p_img)
+                    setattr(get_product, f'product_image_{idx}', p_img)
+                    updated_image_slots.append(idx)
+
+            product_video = python_data.get('product_video')
+            if is_uploaded_file(product_video):
+                get_product.product_video = product_video
+            elif product_video and isinstance(product_video, str) and product_video.strip() not in ['', 'null', 'undefined']:
                 get_product.product_video = product_video
 
-
-            get_product.price = price
-            get_product.discount = discount
-            get_product.final_price = final_price
-            get_product.product_verification = product_verification
-            get_product.shipping_via = shipping_via
-
-            get_product.delay_days_air = delay_days_air
-            get_product.delay_days_ship = delay_days_ship
-            get_product.delay_days_express = delay_days_express
-            get_product.product_type_id = product_type
-            get_product.product_packaging_id = product_packaging
-            get_product.product_packaging_value = product_packaging_value
-            get_product.status = python_data.get('status', get_product.status)
-            get_product.is_inquiry = python_data.get('is_inquiry', get_product.is_inquiry)
-
+            get_product._skip_faiss_refresh = True
             get_product.save()
-            try: 
-                get_product.available_country.set(available_country)
-            except:
-                get_product.available_country.clear()
-            
-            try: 
-                get_product.tag.set(tag)
-            except:
-                get_product.tag.clear()
-            
-            get_product_image_1 = get_product.product_image_1
-            get_product_image_2 = get_product.product_image_2
-            get_product_image_3 = get_product.product_image_3
-            get_product_image_4 = get_product.product_image_4
-            get_product_image_5 = get_product.product_image_5
-            get_product_image_6 = get_product.product_image_6
-            get_product_image_7 = get_product.product_image_7
-            get_product_image_8 = get_product.product_image_8
 
-            domain_path = ""
+            # Only update countries and tags if explicitly provided in request!
+            # NEVER clear them if omitted!
+            if 'available_country' in python_data:
+                ac_raw = python_data.get('available_country')
+                if ac_raw not in [None, '', 'null', 'undefined']:
+                    try:
+                        if isinstance(ac_raw, str):
+                            ac_list = [int(x.strip()) for x in ac_raw.split(',') if x.strip()]
+                        else:
+                            ac_list = ac_raw
+                        get_product.available_country.set(ac_list)
+                    except Exception:
+                        try:
+                            get_product.available_country.set(json.loads(ac_raw))
+                        except Exception:
+                            pass
 
+            if 'tag' in python_data:
+                tag_raw = python_data.get('tag')
+                if tag_raw not in [None, '', 'null', 'undefined']:
+                    try:
+                        if isinstance(tag_raw, str):
+                            tag_list = [int(x.strip()) for x in tag_raw.split(',') if x.strip()]
+                        else:
+                            tag_list = tag_raw
+                        get_product.tag.set(tag_list)
+                    except Exception:
+                        try:
+                            get_product.tag.set(json.loads(tag_raw))
+                        except Exception:
+                            pass
 
-            if get_product_image_1 != None and get_product_image_1 != 'null' and get_product_image_1 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_1.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_1_vector = feat.tolist()
-                        get_product.save()
-                except:
-                    pass
-            
-            if get_product_image_2 != None and get_product_image_2 != 'null' and get_product_image_2 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_2.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_2_vector = feat.tolist()
-                        get_product.save()
-                except:
-                    pass
+            # ASYNC VECTOR EXTRACTION IN BACKGROUND:
+            # Only compute vectors if new image files were uploaded, and do it asynchronously without blocking.
+            if updated_image_slots:
+                async_generate_product_image_vectors(get_product.id, updated_image_slots)
 
-            if get_product_image_3 != None and get_product_image_3 != 'null' and get_product_image_3 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_3.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_3_vector = feat.tolist()
-                        get_product.save()
-                except:
-                    pass
-
-            if get_product_image_4 != None and get_product_image_4 != 'null' and get_product_image_4 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_4.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_4_vector = feat.tolist()
-                        get_product.save()
+            # SPECIFICATIONS UPDATE (Only if other_specification was provided in request)
+            if other_specification is not None:
+                get_ids = []
+                for specification in other_specification:
+                    key = specification.get('key', '')
+                    key_french = specification.get('key_french', '')
+                    value = specification.get('value', '')
+                    value_french = specification.get('value_french', '')
+                    spec_id = specification.get('id')
                 
-                except:
-                    pass
-
-
-            if get_product_image_5 != None and get_product_image_5 != 'null' and get_product_image_5 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_5.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_5_vector = feat.tolist()
-                        get_product.save()
-                except:
-                    pass
-
-            if get_product_image_6 != None and get_product_image_6 != 'null' and get_product_image_6 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_6.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_6_vector = feat.tolist()
-                        get_product.save()
-                except:
-                    pass
-
-            if get_product_image_7 != None and get_product_image_7 != 'null' and get_product_image_7 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_7.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_7_vector = feat.tolist()
-                        get_product.save()
-                except:
-                    pass
-
-            if get_product_image_8 != None and get_product_image_8 != 'null' and get_product_image_8 != '':
-                feat = extract_features_from_url(domain_path+get_product_image_8.url)
-                try:
-                    if feat.size > 0:
-                        get_product.product_image_8_vector = feat.tolist()
-                        get_product.save()
-                except:
-                    pass
-
-
-            get_ids = []
-            for specification in other_specification:
-                key = specification['key']
-                key_french = specification['key_french']
-                value = specification['value']
-                value_french = specification['value_french']
-                if specification.get('id'):
-                    id = specification['id']
-                
-                    if models.ProductOtherSpecification.objects.filter(id = id).exists() and id not in [None,'','null']:
-                        update_data = models.ProductOtherSpecification.objects.get(id = id)
+                    if spec_id and models.ProductOtherSpecification.objects.filter(id=spec_id).exists() and spec_id not in [None, '', 'null']:
+                        update_data = models.ProductOtherSpecification.objects.get(id=spec_id)
                         update_data.key = key
                         update_data.key_french = key_french
                         update_data.value = value
@@ -1037,78 +777,80 @@ def product_model_variant_update(request):
                         update_data.save()
                         get_ids.append(update_data.id)
                     else:
-                        pass
-                else:
-                    create_specification = models.ProductOtherSpecification.objects.create(
-                        product_id = get_product.id,
-                        key = key,
-                        value = value,
-                    )
-                    create_specification.save()
-                    get_ids.append(create_specification.id)
+                        create_specification = models.ProductOtherSpecification.objects.create(
+                            product_id=get_product.id,
+                            key=key,
+                            key_french=key_french,
+                            value=value,
+                            value_french=value_french
+                        )
+                        get_ids.append(create_specification.id)
                                 
-            delete_specification = models.ProductOtherSpecification.objects.filter(product = get_product.id).exclude(id__in = get_ids)
-            delete_specification.delete()
+                delete_specification = models.ProductOtherSpecification.objects.filter(product=get_product.id).exclude(id__in=get_ids)
+                delete_specification.delete()
 
+            # MODELS & VARIANTS UPDATE
+            has_models_in_payload = any(k.startswith('models[') for k in python_data.keys())
             not_deleted_models_id = []
+            all_variants_price = []
+            existing_models_for_prod = list(models.ProductModel.objects.filter(product_id=get_product.id).order_by('id'))
+
             for i in range(500):
                 model_name = f'models[{i}][name]'
                 model_name_french = f'models[{i}][model_name_french]'
 
-
                 if python_data.get(model_name):
-                    model_name = (python_data.get(model_name)).strip()
-                    model_name_french = (python_data.get(model_name_french)).strip()
+                    model_name_val = (python_data.get(model_name)).strip()
+                    model_name_french_val = (python_data.get(model_name_french) or '').strip()
                     model_image = python_data.get(f'models[{i}][image]')
-                    model_id = python_data.get(f'models[{i}][id]',None)
+                    model_id_val = python_data.get(f'models[{i}][id]') or python_data.get(f'models[{i}][model_id]')
 
+                    matched_model = None
+                    if model_id_val not in [None, '', 'null', 'undefined']:
+                        matched_model = models.ProductModel.objects.filter(id=model_id_val, product_id=get_product.id).first()
 
-                    if models.ProductModel.objects.filter(id = model_id).exists() and model_id not in [None,'','null']:
-                        update_model = models.ProductModel.objects.get(id = model_id)
-                        update_model.model_name = model_name
-                        update_model.model_name_french = model_name_french
-                        if not isinstance(model_image, str):
-                            # print("MODEL IS HERE")
-                            update_model.model_image = model_image
+                    if not matched_model and model_name_val:
+                        matched_model = models.ProductModel.objects.filter(product_id=get_product.id, model_name=model_name_val).first()
 
-                        update_model.save()
-                        not_deleted_models_id.append(update_model.id)
+                    if not matched_model and i < len(existing_models_for_prod):
+                        matched_model = existing_models_for_prod[i]
+
+                    if matched_model:
+                        if model_name_val:
+                            matched_model.model_name = model_name_val
+                        if model_name_french_val:
+                            matched_model.model_name_french = model_name_french_val
+                        # SAFE MODEL IMAGE ASSIGNMENT: Only overwrite if an actual uploaded file is provided
+                        if is_uploaded_file(model_image):
+                            matched_model.model_image = convert_avif_to_jpeg_if_needed(model_image)
+
+                        matched_model.save()
+                        not_deleted_models_id.append(matched_model.id)
+                        active_model_id = matched_model.id
 
                     else:
-                        if model_image != None and model_image != 'null' and model_image != '':
-                            img = Image.open(model_image)
-                            if img.format == "AVIF":        
-                                if img.mode in ("RGBA", "LA"):
-                                    img = img.convert("RGB")
-                                    
-                                buffer = BytesIO()
-                                img.save(buffer, format="JPEG", quality=90)
-                                buffer.seek(0)
-                                base_name, ext = os.path.splitext(model_image.name)
-                                jpg_name = base_name + ".jpg"
-                                model_image = ContentFile(buffer.read(), name=jpg_name)
+                        new_model_img = convert_avif_to_jpeg_if_needed(model_image) if is_uploaded_file(model_image) else None
                         create_model = models.ProductModel.objects.create(
-                            product_id = get_product.id,
-                            model_name = model_name,
-                            model_name_french = model_name_french,
-                            model_image = model_image,
-                            status = 'Active'       
+                            product_id=get_product.id,
+                            model_name=model_name_val,
+                            model_name_french=model_name_french_val,
+                            model_image=new_model_img,
+                            status='Active'       
                         )
-                        create_model.save()
-                        model_id = create_model.id
-                        not_deleted_models_id.append(model_id)
+                        not_deleted_models_id.append(create_model.id)
+                        active_model_id = create_model.id
 
+                    has_variants_for_this_model = any(k.startswith(f'models[{i}][variants]') for k in python_data.keys())
                     not_deleted_variant_id = []
-                    list_price = []
-                    # print(True)
+                    existing_variants_for_model = list(models.ProductModelVariant.objects.filter(model_id=active_model_id).order_by('id'))
+
                     for j in range(500):
                         variant_name = f'models[{i}][variants][{j}][name]'
                         variant_name_french = f'models[{i}][variants][{j}][variant_name_french]'
 
-
                         if python_data.get(variant_name):
-                            variant_name = (python_data.get(variant_name)).strip()
-                            variant_name_french = (python_data.get(variant_name_french)).strip()
+                            variant_name_val = (python_data.get(variant_name)).strip()
+                            variant_name_french_val = (python_data.get(variant_name_french) or '').strip()
                             variant_image = python_data.get(f'models[{i}][variants][{j}][image]')
                             variant_price = python_data.get(f'models[{i}][variants][{j}][price]')
                             price_currency = python_data.get('price_currency') or python_data.get('currency')
@@ -1119,99 +861,131 @@ def product_model_variant_update(request):
                                     variant_price = str(round(float(variant_price) / _rate, 2))
                                 except Exception:
                                     pass
-                            variant_id = python_data.get(f'models[{i}][variants][{j}][id]',None)
-                            try:
-                                list_price.append(float(variant_price))
-                            except Exception:
-                                list_price.append(variant_price)
 
-                            
+                            if variant_price not in [None, '', 'null']:
+                                try:
+                                    all_variants_price.append(float(variant_price))
+                                except Exception:
+                                    pass
 
-                            if variant_id not in [None,'','null'] and models.ProductModelVariant.objects.filter(id = variant_id).exists():
-                                update_variant = models.ProductModelVariant.objects.get(id = variant_id)
-                                update_variant.name = variant_name
-                                update_variant.name_french = variant_name_french
-                                update_variant.price = variant_price
+                            variant_id_val = python_data.get(f'models[{i}][variants][{j}][id]') or python_data.get(f'models[{i}][variants][{j}][variant_id]')
+
+                            v_vendor_id = python_data.get(f'models[{i}][variants][{j}][vendor]') or python_data.get('vendor') or get_product.vendor_id
+                            v_vendor_price = python_data.get(f'models[{i}][variants][{j}][vendor_price]')
+
+                            matched_variant = None
+                            if variant_id_val not in [None, '', 'null', 'undefined']:
+                                matched_variant = models.ProductModelVariant.objects.filter(id=variant_id_val, model_id=active_model_id).first()
+
+                            if not matched_variant and variant_name_val:
+                                matched_variant = models.ProductModelVariant.objects.filter(model_id=active_model_id, name=variant_name_val).first()
+
+                            if not matched_variant and j < len(existing_variants_for_model):
+                                matched_variant = existing_variants_for_model[j]
+
+                            if matched_variant:
+                                if variant_name_val:
+                                    matched_variant.name = variant_name_val
+                                if variant_name_french_val:
+                                    matched_variant.name_french = variant_name_french_val
+                                if variant_price not in [None, '', 'null', 'undefined']:
+                                    matched_variant.price = variant_price
 
                                 for dim_field in ['length', 'height', 'width', 'weight', 'carton_length', 'carton_width', 'carton_height', 'carton_weight']:
                                     v_val = python_data.get(f'models[{i}][variants][{j}][{dim_field}]')
-                                    if v_val is not None:
-                                        setattr(update_variant, dim_field, str(v_val)[:50])
+                                    if v_val not in [None, '', 'null', 'undefined']:
+                                        setattr(matched_variant, dim_field, str(v_val)[:50])
 
-                                if not isinstance(variant_image, str):
-                                    # print("VARIANT IS HERE")
-                                    update_variant.image = variant_image
+                                # SAFE VARIANT IMAGE ASSIGNMENT: Only overwrite if an actual uploaded file is provided!
+                                if is_uploaded_file(variant_image):
+                                    matched_variant.image = convert_avif_to_jpeg_if_needed(variant_image)
                                 
-                                update_variant.save()
-                                not_deleted_variant_id.append(update_variant.id)
+                                matched_variant.save()
+                                not_deleted_variant_id.append(matched_variant.id)
+                                target_variant_id = matched_variant.id
 
                             else:
-                                if variant_image != None and variant_image != 'null' and variant_image != '':
-                                    img = Image.open(variant_image)
-                                    if img.format == "AVIF":        
-                                        if img.mode in ("RGBA", "LA"):
-                                            img = img.convert("RGB")
-                                            
-                                        buffer = BytesIO()
-                                        img.save(buffer, format="JPEG", quality=90)
-                                        buffer.seek(0)
-                                        base_name, ext = os.path.splitext(variant_image.name)
-                                        jpg_name = base_name + ".jpg"
-                                        variant_image = ContentFile(buffer.read(), name=jpg_name)
-
-                                v_len = str(python_data.get(f'models[{i}][variants][{j}][length]') or length or '')[:50] or None
-                                v_hei = str(python_data.get(f'models[{i}][variants][{j}][height]') or height or '')[:50] or None
-                                v_wid = str(python_data.get(f'models[{i}][variants][{j}][width]') or width or '')[:50] or None
-                                v_wei = str(python_data.get(f'models[{i}][variants][{j}][weight]') or weight or '')[:50] or None
-                                v_clen = str(python_data.get(f'models[{i}][variants][{j}][carton_length]') or carton_length or '')[:50] or None
-                                v_cwid = str(python_data.get(f'models[{i}][variants][{j}][carton_width]') or carton_width or '')[:50] or None
-                                v_chei = str(python_data.get(f'models[{i}][variants][{j}][carton_height]') or carton_height or '')[:50] or None
-                                v_cwei = str(python_data.get(f'models[{i}][variants][{j}][carton_weight]') or carton_weight or '')[:50] or None
+                                new_var_img = convert_avif_to_jpeg_if_needed(variant_image) if is_uploaded_file(variant_image) else None
+                                v_len = str(python_data.get(f'models[{i}][variants][{j}][length]') or python_data.get('length') or get_product.length or '')[:50] or None
+                                v_hei = str(python_data.get(f'models[{i}][variants][{j}][height]') or python_data.get('height') or get_product.height or '')[:50] or None
+                                v_wid = str(python_data.get(f'models[{i}][variants][{j}][width]') or python_data.get('width') or get_product.width or '')[:50] or None
+                                v_wei = str(python_data.get(f'models[{i}][variants][{j}][weight]') or python_data.get('weight') or get_product.weight or '')[:50] or None
+                                v_clen = str(python_data.get(f'models[{i}][variants][{j}][carton_length]') or python_data.get('carton_length') or get_product.carton_length or '')[:50] or None
+                                v_cwid = str(python_data.get(f'models[{i}][variants][{j}][carton_width]') or python_data.get('carton_width') or get_product.carton_width or '')[:50] or None
+                                v_chei = str(python_data.get(f'models[{i}][variants][{j}][carton_height]') or python_data.get('carton_height') or get_product.carton_height or '')[:50] or None
+                                v_cwei = str(python_data.get(f'models[{i}][variants][{j}][carton_weight]') or python_data.get('carton_weight') or get_product.carton_weight or '')[:50] or None
 
                                 create_variant = models.ProductModelVariant.objects.create(
-                                    product_id = get_product.id,
-                                    model_id = model_id,
-                                    name = variant_name,
-                                    name_french = variant_name_french,
-                                    image = variant_image,
-                                    price = variant_price,
-                                    length = v_len,
-                                    height = v_hei,
-                                    width = v_wid,
-                                    weight = v_wei,
-                                    carton_length = v_clen,
-                                    carton_width = v_cwid,
-                                    carton_height = v_chei,
-                                    carton_weight = v_cwei,
-                                    variant_verification = 'Approved'
+                                    product_id=get_product.id,
+                                    model_id=active_model_id,
+                                    name=variant_name_val,
+                                    name_french=variant_name_french_val,
+                                    image=new_var_img,
+                                    price=variant_price,
+                                    length=v_len,
+                                    height=v_hei,
+                                    width=v_wid,
+                                    weight=v_wei,
+                                    carton_length=v_clen,
+                                    carton_width=v_cwid,
+                                    carton_height=v_chei,
+                                    carton_weight=v_cwei,
+                                    variant_verification='Approved'
                                 )
-                                create_variant.save()
-                                
                                 not_deleted_variant_id.append(create_variant.id)
+                                target_variant_id = create_variant.id
+
+                            # Sync VendorProductPrice for this variant
+                            if v_vendor_id not in [None, '', 'null']:
+                                try:
+                                    vpp = models.VendorProductPrice.objects.filter(variant_id=target_variant_id).first()
+                                    if vpp:
+                                        vpp.vendor_id = v_vendor_id
+                                        if v_vendor_price not in [None, '', 'null']:
+                                            vpp.price = v_vendor_price
+                                        vpp.save()
+                                    elif v_vendor_price not in [None, '', 'null']:
+                                        models.VendorProductPrice.objects.create(
+                                            product_id=get_product.id,
+                                            model_id=active_model_id,
+                                            vendor_id=v_vendor_id,
+                                            variant_id=target_variant_id,
+                                            price=v_vendor_price,
+                                            status='Active'
+                                        )
+                                except Exception:
+                                    pass
                         
                         else:
                             break
                     
-                    delete_variant = models.ProductModelVariant.objects.filter(model = model_id).exclude(id__in = not_deleted_variant_id)
-                    delete_variant.delete()
+                    # Delete variants only if variants were explicitly submitted for this model
+                    if has_variants_for_this_model and not_deleted_variant_id:
+                        delete_variant = models.ProductModelVariant.objects.filter(model_id=active_model_id).exclude(id__in=not_deleted_variant_id)
+                        delete_variant.delete()
 
                 else:
                     break
             
-            delete_model = models.ProductModel.objects.filter(product_id = get_product.id).exclude(id__in = not_deleted_models_id)
-            delete_model.delete()
+            # Delete models only if models were explicitly submitted in the request
+            if has_models_in_payload and not_deleted_models_id:
+                delete_model = models.ProductModel.objects.filter(product_id=get_product.id).exclude(id__in=not_deleted_models_id)
+                delete_model.delete()
 
-            # print(list_price)
-            smallest_price = min(list_price)
-            # print(smallest_price, 'smallest_pricesmallest_pricesmallest_price')
-            get_product = models.ProductDetail.objects.get(id = id)
-            get_product.price = smallest_price
-            get_product.save()
+            # Safely update lowest price if variant prices exist
+            if all_variants_price:
+                try:
+                    smallest_price = min(all_variants_price)
+                    get_product.price = smallest_price
+                    get_product._skip_faiss_refresh = True
+                    get_product.save(update_fields=['price'])
+                except Exception:
+                    pass
 
-            res={
-                'message':'Product Updated Successfully'
+            res = {
+                'message': 'Product Updated Successfully'
             }
-            return HttpResponse(JSONRenderer().render(res), content_type = 'application/json', status=200)
+            return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
 
 
 @csrf_exempt
@@ -2540,6 +2314,28 @@ def all_product_list(request):
     if product_added_from not in [None, '', 'null']:
         filter_condition &= Q(product_added_from=product_added_from)
 
+    # Status Filter
+    if status not in [None, '', 'null', 'undefined']:
+        status_clean = str(status).strip()
+        if status_clean.lower() == 'inactive':
+            query_filter = filter_condition & Q(status__iexact='Inactive')
+        elif status_clean.lower() == 'active':
+            query_filter = filter_condition & Q(status__iexact='Active', product_verification='Approved')
+        elif status_clean.lower() == 'bulk':
+            query_filter = filter_condition & Q(status__iexact='bulk')
+        elif status_clean.lower() in ['yuwi_go', 'yiwu_go']:
+            query_filter = filter_condition & (
+                Q(status__iexact='yuwi_go') | Q(status__iexact='yiwu_go') | 
+                Q(product_added_from__iexact='yuwi_go') | Q(product_added_from__iexact='yiwu_go')
+            )
+        elif status_clean.lower() == 'all':
+            query_filter = filter_condition
+        else:
+            query_filter = filter_condition & Q(status__iexact=status_clean)
+    else:
+        # Default behavior: Active Approved products
+        query_filter = filter_condition & Q(status__iexact='Active', product_verification='Approved')
+
     # Counts
     total_bulk_records = models.ProductDetail.objects.filter(
         filter_condition,
@@ -2551,10 +2347,19 @@ def all_product_list(request):
         Q(status='yuwi_go') | Q(status='yiwu_go') | Q(product_added_from='yuwi_go') | Q(product_added_from='yiwu_go')
     ).count()
 
-    total_records = models.ProductDetail.objects.filter(
+    total_active_records = models.ProductDetail.objects.filter(
         filter_condition,
         product_verification='Approved',
-        status='Active'
+        status__iexact='Active'
+    ).count()
+
+    total_inactive_records = models.ProductDetail.objects.filter(
+        filter_condition,
+        status__iexact='Inactive'
+    ).count()
+
+    total_records = models.ProductDetail.objects.filter(
+        query_filter
     ).count()
 
     total_pending_records = cache.get_or_set(
@@ -2576,9 +2381,7 @@ def all_product_list(request):
 
     # Product List with select_related for related serializer lookups
     all_product = models.ProductDetail.objects.filter(
-        filter_condition,
-        product_verification='Approved',
-        status='Active'
+        query_filter
     ).select_related('category', 'subcategory', 'vendor').order_by('-id')[first_row:last_row]
 
     all_product_list_p = list(all_product)
@@ -2610,12 +2413,14 @@ def all_product_list(request):
         'data': list_data,
         'total_records': total_records,
         'current_page': page_number,
-        'total_pages': int(np.ceil(total_records / row_size)),
+        'total_pages': int(np.ceil(total_records / row_size)) if (row_size > 0 and total_records > 0) else (1 if total_records > 0 else 0),
         'total_pending_records': total_pending_records,
         'pending_inquiry_count': pending_inquiry_count,
         'total_bulk_records': total_bulk_records,
         'total_yuwi_go_records': total_yuwi_go_records,
         'total_yiwu_go_records': total_yuwi_go_records,
+        'total_active_records': total_active_records,
+        'total_inactive_records': total_inactive_records,
     }
 
     json_data = JSONRenderer().render(res)

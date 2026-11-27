@@ -104,6 +104,7 @@ PUBLIC_PATHS = {
     '/api/money_network_list/',
     '/api/promocode_list/',
     '/api/app_setting/',
+    '/api/inquiry_setting/',
     '/api/v1/app/version-check/',
     '/api/v1/app/version-check',
     '/api/app_version_check/',

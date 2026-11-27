@@ -34,6 +34,7 @@ from diabaApp.apis.wishlist_views import *
 from diabaApp.apis.banner_views import *
 from diabaApp.apis.container_views import *
 from diabaApp.apis.activity_views import *
+from diabaApp.apis.wallet_views import *
 from diabaApp.apis.third_party_product_views import fetch_third_party_products, compare_product_flow, import_yuwi_go_products, sync_third_party_products
 from diabaApp.swagger import swagger_ui_html, redoc_ui_html, openapi_schema_json, openapi_schema_refresh
 from diabaApp.auth_helper import token_refresh_api
@@ -52,6 +53,7 @@ urlpatterns = [
     path('api/app_dyanmic_setting_update/',app_dyanmic_setting_update, name='app_dyanmic_setting_update'), #done
     path('api/app_setting/',app_setting, name='app_setting'), #done
     path('api/admin_app_dynamic_setting/',admin_app_dynamic_setting, name='admin_app_dynamic_setting'), #done
+    path('api/inquiry_setting/', inquiry_setting, name='inquiry_setting'),
 
     # App Version Management & SemVer Force Update
     path('api/v1/app/version-check/', app_version_check, name='app_version_check_v1'),
@@ -194,6 +196,20 @@ urlpatterns = [
     path('api/order_create/',order_create, name='order_create'), #done
     path('api/order_create_wave_orange/',order_create_wave_orange, name='order_create_wave_orange'), #done
     path('api/inquiry_order_create/',inquiry_order_create, name='inquiry_order_create'), #done
+
+    ### Wallet & Inquiry Balance Transfer
+    path('api/customer_wallet_balance/', customer_wallet_balance, name='customer_wallet_balance'),
+    path('api/customer_wallet_balance', customer_wallet_balance),
+    path('api/eligible_inquiries_for_wallet/', eligible_inquiries_for_wallet, name='eligible_inquiries_for_wallet'),
+    path('api/eligible_inquiries_for_wallet', eligible_inquiries_for_wallet),
+    path('api/transfer_inquiry_to_wallet/', transfer_inquiry_to_wallet, name='transfer_inquiry_to_wallet'),
+    path('api/transfer_inquiry_to_wallet', transfer_inquiry_to_wallet),
+    path('api/wallet_transaction_history/', wallet_transaction_history, name='wallet_transaction_history'),
+    path('api/wallet_transaction_history', wallet_transaction_history),
+    path('api/calculate_wallet_redemption/', calculate_wallet_redemption, name='calculate_wallet_redemption'),
+    path('api/calculate_wallet_redemption', calculate_wallet_redemption),
+    path('api/admin_customer_wallet_list/', admin_customer_wallet_list, name='admin_customer_wallet_list'),
+    path('api/admin_customer_wallet_list', admin_customer_wallet_list),
 
 
     path('api/cash_status_update/',cash_status_update, name='cash_status_update'), #done

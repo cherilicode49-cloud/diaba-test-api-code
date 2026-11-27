@@ -14,7 +14,7 @@ from firebase_admin import messaging
 import requests
 from django.template.loader import get_template
 from django.core.mail import send_mail
-from diabaApp.serializer import AppDynamicSettingSerializer, ProductDataSerializer, RecentlyViewProductSerializer, CategoryDetailSerializer, \
+from diabaApp.serializer import AppDynamicSettingSerializer, InquirySettingSerializer, ProductDataSerializer, RecentlyViewProductSerializer, CategoryDetailSerializer, \
     AboutUsSerializer, PrivacyPolicySerializer, RefundPolicySerializer, TermsAndConditionSerializer, ImportantNoteSerializer, \
     IntroBannerSerializer, AppVersionSettingSerializer
 from django.db.models.functions import Random
@@ -26,10 +26,28 @@ IMAGE_URL = settings.IMAGE_URL
 
 @csrf_exempt
 def app_setting(request):
-    if request.method == "POST":
+    if request.method in ["POST", "GET"]:
         setting = models.AppDynamicSetting.objects.all().first()
+        if not setting:
+            setting = models.AppDynamicSetting.objects.create(
+                app_version='1.0.0',
+                release_note=''
+            )
         setting_serializer = AppDynamicSettingSerializer(setting).data
-    
+
+        # Also provide inquiry setting info if available
+        inq_setting = models.InquirySetting.objects.all().first()
+        if not inq_setting:
+            inq_setting = models.InquirySetting.objects.create(
+                inquiry_price=0.00,
+                inquiry_currency='XOF',
+                free_inquiry=False
+            )
+        setting_serializer['inquiry_setting'] = InquirySettingSerializer(inq_setting).data
+        setting_serializer['free_inquiry'] = inq_setting.free_inquiry
+        setting_serializer['is_free_inquiry'] = inq_setting.free_inquiry
+        setting_serializer['inquiry_price'] = str(inq_setting.inquiry_price)
+        setting_serializer['inquiry_currency'] = inq_setting.inquiry_currency
 
         res={
             'data':setting_serializer
@@ -39,10 +57,28 @@ def app_setting(request):
 
 @csrf_exempt
 def admin_app_dynamic_setting(request):
-    if request.method == "POST":
+    if request.method in ["POST", "GET"]:
         setting = models.AppDynamicSetting.objects.all().first()
+        if not setting:
+            setting = models.AppDynamicSetting.objects.create(
+                app_version='1.0.0',
+                release_note=''
+            )
 
         setting_serializer = AppDynamicSettingSerializer(setting).data
+
+        inq_setting = models.InquirySetting.objects.all().first()
+        if not inq_setting:
+            inq_setting = models.InquirySetting.objects.create(
+                inquiry_price=0.00,
+                inquiry_currency='XOF',
+                free_inquiry=False
+            )
+        setting_serializer['inquiry_setting'] = InquirySettingSerializer(inq_setting).data
+        setting_serializer['free_inquiry'] = inq_setting.free_inquiry
+        setting_serializer['is_free_inquiry'] = inq_setting.free_inquiry
+        setting_serializer['inquiry_price'] = str(inq_setting.inquiry_price)
+        setting_serializer['inquiry_currency'] = inq_setting.inquiry_currency
 
         res={
             'data':setting_serializer
@@ -57,43 +93,177 @@ def app_dyanmic_setting_update(request):
 
         print('pytohn_data---app_dyanmic_setting_update--->',python_data)
 
-        # login_page = python_data.get('login_page',None)
-        # otp_page = python_data.get('otp_page',None)
-        # subscription_page = python_data.get('subscription_page',None)
-        # ios_free_content = python_data.get('ios_free_content',None)
         app_version = python_data.get('app_version',None)
         release_note = python_data.get('release_note',None)
+        inquiry_price = python_data.get('inquiry_price', None)
+        inquiry_currency = python_data.get('inquiry_currency', None)
+        free_inquiry = python_data.get('free_inquiry', None)
+        if free_inquiry is None:
+            free_inquiry = python_data.get('is_free_inquiry', None)
 
-        if models.AppDynamicSetting.objects.all().count() > 0:
-            setting = models.AppDynamicSetting.objects.all().first()
-
-            # if not isinstance(login_page, str):
-            #     setting.login_page = login_page
-            # if not isinstance(otp_page, str):
-            #     setting.otp_page = otp_page
-            # if not isinstance(subscription_page, str):
-            #     setting.subscription_page = subscription_page
-                
-            # setting.ios_free_content = python_data.get('ios_free_content',setting.ios_free_content)
-            setting.release_note = python_data.get('release_note',setting.release_note)
-            setting.app_version = python_data.get('app_version',setting.app_version)
-
+        setting = models.AppDynamicSetting.objects.all().first()
+        if setting:
+            if release_note is not None:
+                setting.release_note = release_note
+            if app_version is not None:
+                setting.app_version = app_version
             setting.save()
-
         else:
-            models.AppDynamicSetting.objects.create(
-                # login_page = login_page,
-                # otp_page = otp_page,
-                # subscription_page = subscription_page,
-                # ios_free_content = ios_free_content,
-                app_version = app_version,
-                release_note = release_note,
+            setting = models.AppDynamicSetting.objects.create(
+                app_version = app_version or '1.0.0',
+                release_note = release_note or ''
             )
 
+        # Update InquirySetting if inquiry fields were provided
+        if free_inquiry is not None or inquiry_price is not None or inquiry_currency is not None:
+            if free_inquiry is not None:
+                if isinstance(free_inquiry, str):
+                    free_inquiry = free_inquiry.strip().lower() in ['true', '1', 'yes']
+                else:
+                    free_inquiry = bool(free_inquiry)
+
+            if inquiry_price is not None:
+                try:
+                    inquiry_price = round(float(str(inquiry_price).replace(',', '').strip()), 2)
+                except (ValueError, TypeError):
+                    inquiry_price = None
+
+            inq_setting = models.InquirySetting.objects.all().first()
+            if not inq_setting:
+                inq_setting = models.InquirySetting.objects.create(
+                    inquiry_price=inquiry_price if inquiry_price is not None else 0.00,
+                    inquiry_currency=inquiry_currency or 'XOF',
+                    free_inquiry=free_inquiry if free_inquiry is not None else False
+                )
+            else:
+                if free_inquiry is not None:
+                    inq_setting.free_inquiry = free_inquiry
+                if inquiry_price is not None:
+                    inq_setting.inquiry_price = inquiry_price
+                if inquiry_currency is not None:
+                    inq_setting.inquiry_currency = inquiry_currency
+                inq_setting.save()
+
+        setting_serializer = AppDynamicSettingSerializer(setting).data
         res={
-            'message':'Settings Updated'
+            'status': True,
+            'message':'Settings Updated',
+            'data': setting_serializer
         }
         return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+
+@csrf_exempt
+def inquiry_setting(request):
+    """
+    Unified API for InquirySetting module (Singleton pattern - exactly one record).
+    Endpoint: /api/inquiry_setting/
+
+    Behavior:
+    - If record already exists: updates the record with incoming data and saves it.
+    - If record does not exist: creates the record with incoming data (or defaults).
+    - Supports GET to retrieve the current setting (creates default if missing).
+    - Supports POST/PUT/PATCH with JSON or form-data to upsert.
+    """
+    if request.method not in ["GET", "POST", "PUT", "PATCH"]:
+        return HttpResponse(
+            JSONRenderer().render({'status': False, 'message': 'Method not allowed'}),
+            content_type='application/json',
+            status=405
+        )
+
+    python_data = {}
+    if request.body:
+        try:
+            python_data = JSONParser().parse(io.BytesIO(request.body))
+        except Exception:
+            try:
+                import json
+                python_data = json.loads(request.body.decode('utf-8'))
+            except Exception:
+                pass
+
+    if hasattr(request, 'POST') and request.POST:
+        for k, v in request.POST.items():
+            python_data[k] = v
+
+    if not python_data and request.method == "GET" and request.GET:
+        for k, v in request.GET.items():
+            python_data[k] = v
+
+    free_inquiry = python_data.get('free_inquiry', None)
+    if free_inquiry is None:
+        free_inquiry = python_data.get('is_free_inquiry', None)
+
+    inquiry_price = python_data.get('inquiry_price', None)
+    inquiry_currency = python_data.get('inquiry_currency', None)
+
+    if free_inquiry is not None:
+        if isinstance(free_inquiry, str):
+            free_inquiry = free_inquiry.strip().lower() in ['true', '1', 'yes']
+        else:
+            free_inquiry = bool(free_inquiry)
+
+    if inquiry_price is not None:
+        try:
+            inquiry_price = round(float(str(inquiry_price).replace(',', '').strip()), 2)
+        except (ValueError, TypeError):
+            inquiry_price = None
+
+    if inquiry_currency is not None:
+        inquiry_currency = str(inquiry_currency).strip()
+        if inquiry_currency in ['', 'null', 'undefined']:
+            inquiry_currency = None
+
+    setting = models.InquirySetting.objects.all().first()
+
+    if not setting:
+        # Record does not exist -> CREATE record
+        setting = models.InquirySetting.objects.create(
+            inquiry_price=inquiry_price if inquiry_price is not None else 0.00,
+            inquiry_currency=inquiry_currency or 'XOF',
+            free_inquiry=free_inquiry if free_inquiry is not None else False
+        )
+        msg = 'Inquiry settings created successfully'
+    else:
+        # Record exists -> UPDATE record if any field is provided
+        has_updates = False
+        if free_inquiry is not None:
+            setting.free_inquiry = free_inquiry
+            has_updates = True
+        if inquiry_price is not None:
+            setting.inquiry_price = inquiry_price
+            has_updates = True
+        if inquiry_currency is not None:
+            setting.inquiry_currency = inquiry_currency
+            has_updates = True
+
+        if has_updates:
+            setting.save()
+            msg = 'Inquiry settings updated successfully'
+        else:
+            msg = 'Inquiry settings fetched successfully'
+
+    data = {
+        'id': setting.id,
+        'free_inquiry': setting.free_inquiry,
+        'is_free_inquiry': setting.free_inquiry,
+        'inquiry_price': float(setting.inquiry_price or 0.0),
+        'inquiry_currency': setting.inquiry_currency or 'XOF',
+        'created_at': setting.created_at.strftime('%Y-%m-%d %H:%M:%S') if setting.created_at else None,
+        'updated_at': setting.updated_at.strftime('%Y-%m-%d %H:%M:%S') if setting.updated_at else None
+    }
+
+    res = {
+        'status': True,
+        'message': msg,
+        'data': data
+    }
+    return HttpResponse(JSONRenderer().render(res), content_type='application/json', status=200)
+
+
+# Backward-compatible alias for any internal imports
+inquiry_setting_update = inquiry_setting
 
 
 

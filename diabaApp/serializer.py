@@ -81,6 +81,14 @@ class AppDynamicSettingSerializer(serializers.ModelSerializer):
         model = models.AppDynamicSetting
         fields = '__all__'
 
+
+class InquirySettingSerializer(serializers.ModelSerializer):
+    is_free_inquiry = serializers.BooleanField(source='free_inquiry', read_only=True)
+
+    class Meta:
+        model = models.InquirySetting
+        fields = '__all__'
+
 class AdminDetailSerializer(serializers.ModelSerializer):   
     role = serializers.ReadOnlyField(source='userType.roleName')
 
@@ -2482,5 +2490,50 @@ class AppVersionCheckResponseSerializer(serializers.Serializer):
     update_title = serializers.CharField()
     release_notes = serializers.CharField(allow_blank=True, allow_null=True)
     store_url = serializers.CharField()
+
+
+class WalletTransactionSerializer(serializers.ModelSerializer):
+    customer_name = serializers.ReadOnlyField(source='customer.name')
+    customer_email = serializers.ReadOnlyField(source='customer.email')
+    customer_mobile = serializers.ReadOnlyField(source='customer.mobileNumber')
+    created_at_formatted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = models.WalletTransaction
+        fields = '__all__'
+
+    def get_created_at_formatted(self, obj):
+        return obj.created_at.strftime('%Y-%m-%d %H:%M:%S') if obj.created_at else None
+
+
+class CustomerWalletSerializer(serializers.ModelSerializer):
+    customer_name = serializers.ReadOnlyField(source='customer.name')
+    customer_email = serializers.ReadOnlyField(source='customer.email')
+    customer_mobile = serializers.ReadOnlyField(source='customer.mobileNumber')
+    currency_conversions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = models.CustomerWallet
+        fields = '__all__'
+
+    def get_currency_conversions(self, obj):
+        conversions = {'USD': float(obj.balance)}
+        try:
+            xof_rate_obj = models.CurrencyConverter.objects.filter(currency_code='XOF').first()
+            xof_rate = float(xof_rate_obj.system_rate) if xof_rate_obj and xof_rate_obj.system_rate else 589.0
+
+            for conv in models.CurrencyConverter.objects.all():
+                code = conv.currency_code
+                rate = float(conv.system_rate) if conv.system_rate else 0.0
+                if code == 'USD':
+                    conversions['USD'] = round(float(obj.balance), 2)
+                elif code == 'XOF':
+                    conversions['XOF'] = round(float(obj.balance) * xof_rate, 2)
+                else:
+                    conversions[code] = round(float(obj.balance) * rate, 2)
+        except Exception:
+            pass
+        return conversions
+
 
 

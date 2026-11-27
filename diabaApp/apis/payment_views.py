@@ -2236,10 +2236,31 @@ def initiate_bictorys_payment_for_inquiry(request):
                 status=400
             )
  
+        # Check dynamic setting for free inquiry and price from InquirySetting model
+        setting = models.InquirySetting.objects.all().first()
+        is_free_inquiry = setting.free_inquiry if setting else False
+        configured_price = float(setting.inquiry_price) if (setting and setting.inquiry_price is not None) else 0.0
+
+        if is_free_inquiry or configured_price <= 0:
+            return HttpResponse(
+                JSONRenderer().render({
+                    "success": True,
+                    "free_inquiry": True,
+                    "is_free": True,
+                    "is_free_inquiry": True,
+                    "message": "Inquiry is currently free. No payment required.",
+                    "amount": 0,
+                    "currency": setting.inquiry_currency if (setting and setting.inquiry_currency) else "XOF"
+                }),
+                content_type="application/json",
+                status=200
+            )
+
         amount = python_data.get("amount")
- 
+        if amount is None or str(amount).strip() == "":
+            amount = configured_price
+
         if amount is None:
- 
             return HttpResponse(
                 JSONRenderer().render({
                     "success": False,

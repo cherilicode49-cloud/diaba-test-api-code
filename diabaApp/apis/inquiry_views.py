@@ -39,15 +39,41 @@ def product_inquiry_form(request):
 
             customer_id = request.POST.get("customer_id")
 
+            # Dynamic setting check for inquiry price & free_inquiry toggle
+            setting = models.InquirySetting.objects.all().first()
+            is_free_inquiry = setting.free_inquiry if setting else False
+            configured_price = float(setting.inquiry_price) if (setting and setting.inquiry_price is not None) else 0.0
+            configured_currency = setting.inquiry_currency if (setting and setting.inquiry_currency) else "XOF"
+
+            raw_amount = request.POST.get("amount")
+            bictorys_id = request.POST.get("bictorys_transaction_id")
+            payment_ref = request.POST.get("payment_reference")
+
+            # Determine payment parameters
+            if is_free_inquiry or configured_price <= 0:
+                payment_type = "Free"
+                payment_id = bictorys_id or f"FREE-{uuid.uuid4().hex[:10].upper()}"
+                reference_id = payment_ref or f"FREE-REF-{uuid.uuid4().hex[:8].upper()}"
+                total_amount = "0"
+                currency = configured_currency
+                status = "Success"
+            else:
+                payment_type = request.POST.get("payment_type", "Bictorys") or "Bictorys"
+                payment_id = bictorys_id or f"TX-{uuid.uuid4().hex[:10].upper()}"
+                reference_id = payment_ref or f"REF-{uuid.uuid4().hex[:8].upper()}"
+                total_amount = raw_amount if raw_amount is not None else str(configured_price)
+                currency = request.POST.get("currency", configured_currency) or configured_currency
+                status = "Success"
+
             with transaction.atomic():
                 payment_transaction = models.ProductRequestTransaction.objects.create(
                     customer_id=customer_id,
-                    payment_type="Bictorys",
-                    payment_id=request.POST.get("bictorys_transaction_id"),
-                    reference_id=request.POST.get("payment_reference"),
-                    total_amount=request.POST.get("amount"),
-                    currency="XOF",
-                    status="Success",
+                    payment_type=payment_type,
+                    payment_id=payment_id,
+                    reference_id=reference_id,
+                    total_amount=total_amount,
+                    currency=currency,
+                    status=status,
                 )
 
                 print(request.POST, 'product_data', flush=True)

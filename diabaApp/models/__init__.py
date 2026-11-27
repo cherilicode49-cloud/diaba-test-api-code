@@ -15,3 +15,4 @@ from .vendor_models import *
 from .warehouse_models import *
 from .banner_models import *
 from .container_models import *
+from .wallet_models import *

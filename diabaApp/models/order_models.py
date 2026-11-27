@@ -33,6 +33,8 @@ class OrderDetail(models.Model):
     status = models.CharField(max_length=100, verbose_name="status", null=True)
     order_from = models.CharField(max_length=100, verbose_name="order_from", null=True, default='App')
     is_order_track = models.BooleanField(default=False, verbose_name="is_order_track", null=True)
+    is_wallet_transferred = models.BooleanField(default=False, verbose_name="Is Wallet Transferred", null=True)
+    wallet_transferred_at = models.DateTimeField(null=True, blank=True, verbose_name="Wallet Transferred At")
     is_deleted = models.BooleanField(default=False, verbose_name="is deleted", db_index=True)
     deleted_at = models.DateTimeField(verbose_name="deleted at", null=True, blank=True)
     
