@@ -19,6 +19,7 @@ import numpy as np
 from django.core.files.base import ContentFile, File
 from diabaApp.payment_gateway import APIDTSClient
 from weasyprint import HTML
+from django.db import transaction
 from decimal import Decimal
 import uuid
 from diabaApp.apis.wallet_views import compute_customer_locked_balances, get_all_currency_rates, convert_to_usd, calculate_locked_values
@@ -175,10 +176,10 @@ def _handle_order_promocodes_and_commissions(order, promocodes_input, currency_n
     return primary_name, primary_discount, applied_list
 
 
-def process_order_wallet_redemption(order, python_data, currency_name, now):
+def process_order_wallet_redemption(order, python_data, currency_name, now=None):
     """
     Checks if wallet redemption was requested for an order, deducts balance from CustomerWallet,
-    and logs an auditable Debit transaction in WalletTransaction.
+    and logs an auditable Debit transaction in WalletTransaction within an atomic transaction.
     """
     use_wallet = python_data.get('use_wallet') or python_data.get('redeem_wallet') or python_data.get('is_wallet_redeem')
     wallet_amount_input = python_data.get('wallet_amount') or python_data.get('wallet_amount_used')
@@ -187,61 +188,64 @@ def process_order_wallet_redemption(order, python_data, currency_name, now):
     if not is_requested or not order or not order.customer:
         return {'wallet_used': False, 'wallet_amount_used': 0.0}
 
-    customer_wallet = models.CustomerWallet.objects.select_for_update().filter(customer=order.customer).first()
-    if not customer_wallet or customer_wallet.balance <= Decimal('0.00'):
-        return {'wallet_used': False, 'wallet_amount_used': 0.0}
+    with transaction.atomic():
+        customer_wallet = models.CustomerWallet.objects.select_for_update().filter(customer=order.customer).first()
+        if not customer_wallet or customer_wallet.balance <= Decimal('0.00'):
+            return {'wallet_used': False, 'wallet_amount_used': 0.0}
 
-    rates = get_all_currency_rates()
-    locked_balances = compute_customer_locked_balances(order.customer, customer_wallet, rates)
-    avail_in_order_curr = float(locked_balances.get(currency_name, 0.0))
+        rates = get_all_currency_rates()
+        locked_balances = compute_customer_locked_balances(order.customer, customer_wallet, rates)
+        avail_in_order_curr = float(locked_balances.get(currency_name, 0.0))
 
-    if wallet_amount_input:
-        try:
-            redeem_amount = min(float(wallet_amount_input), avail_in_order_curr)
-        except (ValueError, TypeError):
+        if wallet_amount_input:
+            try:
+                redeem_amount = min(float(wallet_amount_input), avail_in_order_curr)
+            except (ValueError, TypeError):
+                redeem_amount = avail_in_order_curr
+        else:
             redeem_amount = avail_in_order_curr
-    else:
-        redeem_amount = avail_in_order_curr
 
-    if redeem_amount <= 0:
-        return {'wallet_used': False, 'wallet_amount_used': 0.0}
+        if redeem_amount <= 0:
+            return {'wallet_used': False, 'wallet_amount_used': 0.0}
 
-    usd_val = convert_to_usd(redeem_amount, currency_name, rates)
-    wallet_rate = rates.get(customer_wallet.currency, 1.0)
-    deduct_base = Decimal(str(round(usd_val * wallet_rate, 2) if customer_wallet.currency != 'USD' else round(usd_val, 2)))
+        usd_val = convert_to_usd(redeem_amount, currency_name, rates)
+        wallet_rate = rates.get(customer_wallet.currency, 1.0)
+        deduct_base = Decimal(str(round(usd_val * wallet_rate, 2) if customer_wallet.currency != 'USD' else round(usd_val, 2)))
 
-    bal_before = customer_wallet.balance
-    bal_after = max(Decimal('0.00'), bal_before - deduct_base)
-    customer_wallet.balance = bal_after
-    customer_wallet.save(update_fields=['balance', 'updated_at'])
+        bal_before = customer_wallet.balance
+        bal_after = max(Decimal('0.00'), bal_before - deduct_base)
+        customer_wallet.balance = bal_after
+        customer_wallet.save(update_fields=['balance', 'updated_at'])
 
-    wtx_ref = f"WTX-ORD-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
-    debit_locked = calculate_locked_values(usd_val, rates)
-    debit_locked[currency_name] = round(redeem_amount, 2)
+        timestamp = now if now else timezone.now()
+        timestamp_str = timestamp.strftime('%Y%m%d%H%M%S') if hasattr(timestamp, 'strftime') else timezone.now().strftime('%Y%m%d%H%M%S')
+        wtx_ref = f"WTX-ORD-{timestamp_str}-{uuid.uuid4().hex[:6].upper()}"
+        debit_locked = calculate_locked_values(usd_val, rates)
+        debit_locked[currency_name] = round(redeem_amount, 2)
 
-    models.WalletTransaction.objects.create(
-        wallet=customer_wallet,
-        customer=order.customer,
-        transaction_type='Debit',
-        amount=Decimal(str(round(redeem_amount, 2))),
-        currency=currency_name,
-        balance_before=bal_before,
-        balance_after=bal_after,
-        source_type='Order_Redemption',
-        source_id=order.order_id,
-        transaction_ref=wtx_ref,
-        description=f"Wallet redemption applied to Order {order.order_id} ({redeem_amount} {currency_name})",
-        rates_snapshot=rates,
-        locked_values=debit_locked,
-        status='Success'
-    )
+        models.WalletTransaction.objects.create(
+            wallet=customer_wallet,
+            customer=order.customer,
+            transaction_type='Debit',
+            amount=Decimal(str(round(redeem_amount, 2))),
+            currency=currency_name,
+            balance_before=bal_before,
+            balance_after=bal_after,
+            source_type='Order_Redemption',
+            source_id=order.order_id,
+            transaction_ref=wtx_ref,
+            description=f"Wallet redemption applied to Order {order.order_id} ({redeem_amount} {currency_name})",
+            rates_snapshot=rates,
+            locked_values=debit_locked,
+            status='Success'
+        )
 
-    return {
-        'wallet_used': True,
-        'wallet_amount_used': redeem_amount,
-        'wallet_transaction_ref': wtx_ref,
-        'remaining_wallet_balance': float(customer_wallet.balance)
-    }
+        return {
+            'wallet_used': True,
+            'wallet_amount_used': redeem_amount,
+            'wallet_transaction_ref': wtx_ref,
+            'remaining_wallet_balance': float(customer_wallet.balance)
+        }
 
 
 
@@ -297,7 +301,7 @@ def order_create(request):
         current_date = now.strftime('%Y%m%d')
         current_date_data = datetime.strptime(current_date, '%Y%m%d').date()
 
-        expire_at = now + timedelta(minutes=15)
+        expire_at = timezone.now() + timedelta(minutes=15)
 
         # total_price = 20
 
@@ -706,7 +710,7 @@ def order_create_wave_orange(request):
         current_date = now.strftime('%Y%m%d')
         current_date_data = datetime.strptime(current_date, '%Y%m%d').date()
 
-        expire_at = now + timedelta(minutes=15)
+        expire_at = timezone.now() + timedelta(minutes=15)
 
         # total_price = 20
 
@@ -1075,7 +1079,7 @@ def inquiry_order_create(request):
         current_date = now.strftime('%Y%m%d')
         current_date_data = datetime.strptime(current_date, '%Y%m%d').date()
 
-        expire_at = now + timedelta(minutes=15)
+        expire_at = timezone.now() + timedelta(minutes=15)
 
         print("customer_address--->",customer_address)
         # total_price = 20
